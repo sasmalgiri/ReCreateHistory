@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+*.log
+.DS_Store
+.env
+.env.*
+# app data written at runtime (never commit a user's ledger)
+*.sqlite3
+*.sqlite3-*
+secrets.json

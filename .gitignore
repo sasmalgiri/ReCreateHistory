@@ -1,0 +1,23 @@
+# Dependencies & build output
+node_modules/
+dist/
+out/
+release/
+build/Release/
+
+# Runtime data — never commit a user's ledger or secrets
+data/
+*.sqlite3
+*.sqlite3-*
+secrets.json
+.env
+.env.*
+!.env.example
+
+# Reference clone of the original macOS Swift app (kept locally, not part of this repo)
+kalsmritikosh/
+
+# Logs / OS cruft
+*.log
+.DS_Store
+Thumbs.db
