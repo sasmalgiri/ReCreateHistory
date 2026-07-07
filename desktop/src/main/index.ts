@@ -22,6 +22,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#0f1219',
     title: 'ReCreateHistory',
+    icon: join(__dirname, '../../resources/icon.png'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
