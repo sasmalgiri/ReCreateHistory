@@ -83,8 +83,10 @@ npm run typecheck     # server + web
 npm run smoke         # ingest a fixture → build ledger → run a real Ask (per-user pipeline)
 ```
 
-## Security notes (before going truly public)
+## Going public — hardening (built in)
 
-- Set a strong `JWT_SECRET` and serve over HTTPS (cookies are `secure` in prod).
-- Add rate-limiting on `/api/auth/*` and `/api/invoke`, and email verification, before opening sign-ups widely.
-- Uploads are parsed server-side; keep `MAX_UPLOAD_BYTES` sane and consider a virus scan for public use.
+- **Rate limiting**: login/signup/reset are IP-limited; `/api/invoke` and uploads are per-user limited. Brute force returns 429.
+- **Quotas**: per-user storage (`STORAGE_QUOTA_MB`, default 500) and daily LLM-answer cap (`ASK_DAILY_LIMIT`, default 200) — a hostile user can't fill your disk or burn your API credits.
+- **Email verification + password reset**: set `RESEND_API_KEY` (+ `EMAIL_FROM`, `APP_URL`, optionally `REQUIRE_EMAIL_VERIFICATION=true`). Without a provider, reset returns a clear 501 and verification is not required (self-host mode).
+- **Legal**: `/terms` and `/privacy` are served and linked from the login screen — review the wording before launch (template, not legal advice).
+- **Deployment**: strong `JWT_SECRET` (enforced in prod), HTTPS via your host, persistent volume at `DATA_DIR`.

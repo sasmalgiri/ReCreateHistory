@@ -59,7 +59,33 @@ async function main() {
   const inv2 = await invoke('app.inventory')
   console.log(`SMOKE isolation: second user objects=${inv2.objects} events=${inv2.events} (expect 0)`)
 
-  const pass = inv.entities > 0 && inv.events > 0 && !answer.refused && answer.citations.length > 0 && inv2.objects === 0
+  // ── Hardening checks ──
+  // 1. Login brute-force rate limit: hammer wrong passwords until 429.
+  let got429 = false
+  for (let i = 0; i < 20; i++) {
+    const r = await fetch(BASE + '/api/auth/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'nobody@example.com', password: 'wrongwrong' })
+    })
+    if (r.status === 429) { got429 = true; break }
+  }
+  console.log(`SMOKE rate-limit: login brute force ${got429 ? 'blocked (429)' : 'NOT blocked'}`)
+
+  // 2. Reset endpoint: no email provider configured → clear 501, not a crash.
+  const rr = await fetch(BASE + '/api/auth/request-reset', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'nobody@example.com' })
+  })
+  const resetOk = rr.status === 501 || rr.status === 200
+  console.log(`SMOKE reset endpoint: HTTP ${rr.status} (${resetOk ? 'ok' : 'unexpected'})`)
+
+  // 3. Legal pages served.
+  const terms = await fetch(BASE + '/terms')
+  const legalOk = terms.ok && (await terms.text()).includes('Terms of Service')
+  console.log(`SMOKE legal pages: ${legalOk ? 'served' : 'MISSING'}`)
+
+  const pass = inv.entities > 0 && inv.events > 0 && !answer.refused && answer.citations.length > 0 &&
+    inv2.objects === 0 && got429 && resetOk && legalOk
   console.log(`SMOKE HTTP RESULT: ${pass ? 'PASS' : 'FAIL'}`)
   process.exit(pass ? 0 : 1)
 }

@@ -7,7 +7,7 @@
 import express, { type Response } from 'express'
 import cookieParser from 'cookie-parser'
 import multer from 'multer'
-import { existsSync } from 'node:fs'
+import { existsSync, unlinkSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { config } from './config'
 import { users } from './users'
@@ -16,6 +16,10 @@ import { createHandlers, type HandlerMap, type PushFn } from './domainHandlers'
 import type { UserApp } from './userApp'
 import { requireAuth, setSessionCookie, clearSessionCookie, userIdFromRequest, type AuthedRequest } from './auth'
 import { userUploadsDir } from './paths'
+import { limitByIp, limitByUser } from './rateLimit'
+import { quotas } from './quotas'
+import { emailEnabled, sendEmail, verificationEmail, resetEmail } from './email'
+import { termsHtml, privacyHtml } from './legal'
 import { log } from './core/logger'
 
 // ── SSE hub: push events (ask streaming, ingest ticks) to a user's tabs ──
@@ -43,11 +47,21 @@ const app = express()
 app.use(express.json({ limit: '2mb' }))
 app.use(cookieParser())
 
-// ── Auth ──
-app.post('/api/auth/signup', (req, res) => {
+// ── Auth (rate-limited by IP; verification enforced when email is on) ──
+const verificationRequired = (): boolean => emailEnabled() && config.email.requireVerification
+
+app.post('/api/auth/signup', limitByIp('signup', 10, 15 * 60_000), async (req, res) => {
   try {
     const { email, password, displayName } = req.body ?? {}
     const user = users.create(String(email ?? ''), String(password ?? ''), displayName)
+    if (verificationRequired()) {
+      const token = users.issueVerifyToken(user.id)
+      const link = `${config.appUrl}/#/verify?token=${token}`
+      const mail = verificationEmail(link)
+      await sendEmail(user.email, mail.subject, mail.html)
+      res.json({ user: null, verifyEmailSent: true })
+      return
+    }
     setSessionCookie(res, user.id)
     res.json({ user })
   } catch (err) {
@@ -55,12 +69,47 @@ app.post('/api/auth/signup', (req, res) => {
   }
 })
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', limitByIp('login', 15, 15 * 60_000), (req, res) => {
   const { email, password } = req.body ?? {}
   const user = users.verify(String(email ?? ''), String(password ?? ''))
   if (!user) { res.status(401).json({ error: 'Invalid email or password.' }); return }
+  if (verificationRequired() && !user.emailVerified) {
+    res.status(403).json({ error: 'Please verify your email first — check your inbox.' })
+    return
+  }
   setSessionCookie(res, user.id)
   res.json({ user })
+})
+
+app.post('/api/auth/verify-email', limitByIp('verify', 30, 15 * 60_000), (req, res) => {
+  const ok = users.verifyEmailByToken(String(req.body?.token ?? ''))
+  if (!ok) { res.status(400).json({ error: 'Invalid or already-used verification link.' }); return }
+  res.json({ ok: true })
+})
+
+app.post('/api/auth/request-reset', limitByIp('reset-req', 5, 15 * 60_000), async (req, res) => {
+  // Always 200 — never leak whether the account exists.
+  const email = String(req.body?.email ?? '')
+  if (emailEnabled()) {
+    const token = users.issueResetToken(email)
+    if (token) {
+      const mail = resetEmail(`${config.appUrl}/#/reset?token=${token}`)
+      await sendEmail(email.trim().toLowerCase(), mail.subject, mail.html)
+    }
+    res.json({ ok: true })
+    return
+  }
+  res.status(501).json({ error: 'Password reset is not available on this deployment (no email provider configured). Contact the operator.' })
+})
+
+app.post('/api/auth/reset', limitByIp('reset', 10, 15 * 60_000), (req, res) => {
+  try {
+    const ok = users.resetPassword(String(req.body?.token ?? ''), String(req.body?.password ?? ''))
+    if (!ok) { res.status(400).json({ error: 'Invalid or expired reset link. Request a new one.' }); return }
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message ?? err) })
+  }
 })
 
 app.post('/api/auth/logout', (_req, res) => { clearSessionCookie(res); res.json({ ok: true }) })
@@ -86,9 +135,19 @@ app.get('/api/events', requireAuth, (req: AuthedRequest, res) => {
 })
 
 // ── The unified RPC surface (same as desktop window.km) ──
-app.post('/api/invoke', requireAuth, async (req: AuthedRequest, res) => {
+const ASK_PATHS = new Set(['ask.ask', 'ask.start', 'notebook.run'])
+
+app.post('/api/invoke', requireAuth, limitByUser('invoke', 240, 60_000), async (req: AuthedRequest, res) => {
   const { path, args } = req.body ?? {}
   if (typeof path !== 'string') { res.status(400).json({ error: 'bad request' }); return }
+  // Daily LLM-answer cap — protects the operator's compute/API credits.
+  if (ASK_PATHS.has(path)) {
+    const q = quotas.tryConsumeAsk(req.userId!)
+    if (!q.ok) {
+      res.status(429).json({ error: `Daily question limit reached (${q.limit}/day). Resets at midnight UTC.` })
+      return
+    }
+  }
   const userApp = userManager.get(req.userId!)
   const handlers = handlersFor(userApp)
   const fn = handlers[path]
@@ -110,10 +169,30 @@ const upload = multer({
   }),
   limits: { fileSize: config.maxUploadBytes }
 })
-app.post('/api/upload', requireAuth, upload.array('files', 200), (req: AuthedRequest, res) => {
+app.post('/api/upload', requireAuth, limitByUser('upload', 60, 60 * 60_000), (req: AuthedRequest, res, next) => {
+  // Reject before accepting bytes when the user is already at quota.
+  const pre = quotas.storageAllows(req.userId!, 0)
+  if (!pre.ok) {
+    res.status(413).json({ error: `Storage quota reached (${Math.round(pre.limitBytes / 1048576)} MB). Delete files to free space.` })
+    return
+  }
+  next()
+}, upload.array('files', 200), (req: AuthedRequest, res) => {
   const files = (req.files as Express.Multer.File[]) ?? []
+  const total = files.reduce((a, f) => a + f.size, 0)
+  const check = quotas.storageAllows(req.userId!, total)
+  if (!check.ok) {
+    for (const f of files) { try { unlinkSync(f.path) } catch { /* best effort */ } }
+    res.status(413).json({ error: `Upload exceeds your storage quota (${Math.round(check.limitBytes / 1048576)} MB).` })
+    return
+  }
+  quotas.recordStorage(req.userId!, total)
   res.json({ paths: files.map((f) => f.path), names: files.map((f) => f.originalname) })
 })
+
+// ── Legal pages ──
+app.get('/terms', (_req, res) => res.type('html').send(termsHtml))
+app.get('/privacy', (_req, res) => res.type('html').send(privacyHtml))
 
 // ── Static (prod): serve the built renderer ──
 const publicDir = resolve('dist/public')

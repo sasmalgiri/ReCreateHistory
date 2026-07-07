@@ -37,7 +37,21 @@ export const config = {
   // Hosted SaaS is cloud-by-nature; the privacy gate is open so the cloud
   // fallback can resolve. (Individual answers still prefer local Ollama.)
   allowCloud: true,
-  maxUploadBytes: Number(env.MAX_UPLOAD_BYTES || 50 * 1024 * 1024)
+  maxUploadBytes: Number(env.MAX_UPLOAD_BYTES || 50 * 1024 * 1024),
+  // ── Public-signup hardening ──
+  /** Per-user total stored bytes (uploads); 0 disables the check. */
+  storageQuotaBytes: Number(env.STORAGE_QUOTA_MB || 500) * 1024 * 1024,
+  /** Per-user LLM-answer questions per day; 0 disables the cap. */
+  askDailyLimit: Number(env.ASK_DAILY_LIMIT ?? 200),
+  /** Public base URL used in email links, e.g. https://app.example.com */
+  appUrl: (env.APP_URL || `http://localhost:${Number(env.PORT || 8787)}`).replace(/\/$/, ''),
+  email: {
+    /** Resend API key (https://resend.com). Absent = email features off. */
+    resendKey: env.RESEND_API_KEY || '',
+    from: env.EMAIL_FROM || 'ReCreateHistory <onboarding@resend.dev>',
+    /** Require verified email before login (only enforced when a provider is configured). */
+    requireVerification: env.REQUIRE_EMAIL_VERIFICATION === 'true'
+  }
 }
 
 if (config.isProd && !config.jwtSecret) {
