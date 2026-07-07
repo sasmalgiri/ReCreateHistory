@@ -5,3 +5,7 @@ data/
 .env
 .env.local
 .DS_Store
+.vercel/
+
+.vercel
+api/_server.mjs

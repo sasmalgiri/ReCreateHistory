@@ -4,15 +4,27 @@
   "outputDirectory": "dist/public",
   "framework": null,
   "functions": {
-    "api/index.ts": {
+    "api/index.js": {
       "maxDuration": 60,
       "memory": 1024
     }
   },
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api/index" },
-    { "source": "/terms", "destination": "/api/index" },
-    { "source": "/privacy", "destination": "/api/index" },
-    { "source": "/:path((?!assets/|icon\\.png).*)", "destination": "/index.html" }
+    {
+      "source": "/api/:path*",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/terms",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/:path((?!assets/|icon\\.png).*)",
+      "destination": "/index.html"
+    }
   ]
 }
