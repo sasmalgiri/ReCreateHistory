@@ -93,7 +93,7 @@ export class CapabilityRegistry {
   async embed(text: string): Promise<number[] | null> {
     const p = await this.resolve({
       requires: ['embedding'], prefers: [], maxLatency: 'interactive',
-      privacy: 'localNetwork', estimatedContextTokens: 512, purpose: 'embed'
+      privacy: 'cloud', estimatedContextTokens: 512, purpose: 'embed'
     })
     if (!p) return null
     try {
@@ -106,7 +106,7 @@ export class CapabilityRegistry {
   async embedBatch(texts: string[]): Promise<number[][] | null> {
     const p = await this.resolve({
       requires: ['embedding'], prefers: [], maxLatency: 'background',
-      privacy: 'localNetwork', estimatedContextTokens: 512, purpose: 'embedBatch'
+      privacy: 'cloud', estimatedContextTokens: 512, purpose: 'embedBatch'
     })
     if (!p) return null
     try {
@@ -119,7 +119,7 @@ export class CapabilityRegistry {
   hasEmbedding(): Promise<boolean> {
     return this.resolve({
       requires: ['embedding'], prefers: [], maxLatency: 'background',
-      privacy: 'localNetwork', estimatedContextTokens: 1, purpose: 'probe'
+      privacy: 'cloud', estimatedContextTokens: 1, purpose: 'probe'
     }).then((p) => !!p)
   }
 
