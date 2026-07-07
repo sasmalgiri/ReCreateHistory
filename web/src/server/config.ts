@@ -19,7 +19,12 @@ function pickCloud(): { provider: 'anthropic' | 'openai' | 'none'; model: string
   return { provider: 'none', model: '', key: '' }
 }
 
-const cloud = pickCloud()
+const cloud = {
+  ...pickCloud(),
+  // Any OpenAI-compatible endpoint: Gemini free tier, Groq, OpenRouter, vLLM…
+  baseURL: (env.CLOUD_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
+  embedModel: env.CLOUD_EMBED_MODEL || 'text-embedding-3-small'
+}
 
 export const config = {
   isProd: env.NODE_ENV === 'production',

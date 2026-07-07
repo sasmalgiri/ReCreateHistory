@@ -13,6 +13,9 @@ export interface CloudConfig {
   provider: 'anthropic' | 'openai'
   model: string
   apiKey: string
+  /** OpenAI-compatible base URL (Gemini/Groq/OpenRouter work here too). */
+  baseURL?: string
+  embedModel?: string
 }
 
 export class CloudProvider implements ModelProvider {
@@ -73,7 +76,7 @@ export class CloudProvider implements ModelProvider {
     const messages: any[] = []
     if (options.systemPrompt) messages.push({ role: 'system', content: options.systemPrompt })
     messages.push({ role: 'user', content: prompt })
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch(`${this.cfg.baseURL || 'https://api.openai.com/v1'}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.cfg.apiKey}` },
       body: JSON.stringify({
@@ -95,10 +98,10 @@ export class CloudProvider implements ModelProvider {
     if (this.cfg.provider !== 'openai') {
       throw new ProviderError('capabilityMissing', 'Cloud embeddings only via OpenAI.')
     }
-    const res = await fetch('https://api.openai.com/v1/embeddings', {
+    const res = await fetch(`${this.cfg.baseURL || 'https://api.openai.com/v1'}/embeddings`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${this.cfg.apiKey}` },
-      body: JSON.stringify({ model: 'text-embedding-3-small', input: text })
+      body: JSON.stringify({ model: this.cfg.embedModel || 'text-embedding-3-small', input: text })
     })
     if (!res.ok) throw new ProviderError('generationFailed', `OpenAI embeddings HTTP ${res.status}`)
     const data = (await res.json()) as any

@@ -63,7 +63,8 @@ export class UserApp {
     }))
     if (config.cloud.provider !== 'none' && config.cloud.key) {
       this.capabilities.register(new CloudProvider({
-        provider: config.cloud.provider, model: config.cloud.model, apiKey: config.cloud.key
+        provider: config.cloud.provider, model: config.cloud.model, apiKey: config.cloud.key,
+        baseURL: config.cloud.baseURL, embedModel: config.cloud.embedModel
       }))
     }
 
