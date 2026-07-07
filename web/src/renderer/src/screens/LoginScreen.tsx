@@ -151,6 +151,22 @@ export default function LoginScreen(): JSX.Element {
             </Button>
           </form>
 
+          {mode === 'login' && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true); setError(null)
+                try { await post('/api/auth/guest', {}); await refresh() }
+                catch (err) { setError(String((err as Error).message ?? err)) }
+                finally { setBusy(false) }
+              }}
+              className="mt-3 w-full rounded-lg border border-ink-700 px-3 py-2 text-sm text-ink-300 transition-colors hover:border-accent/50 hover:text-accent-soft"
+            >
+              Try as guest — no signup needed
+            </button>
+          )}
+
           <div className="mt-4 space-y-1 text-center text-sm text-ink-500">
             {mode === 'login' && (
               <>

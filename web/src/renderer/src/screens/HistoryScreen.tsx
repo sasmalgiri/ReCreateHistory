@@ -43,7 +43,7 @@ export default function HistoryScreen(): JSX.Element {
       <PageHeader
         icon={<BookOpen className="h-5 w-5" />}
         title="Reconstruction"
-        subtitle="The evidence-backed version of events — every item labeled by how it is known, never averaged away."
+        subtitle="The evidence-backed version of events — every item labeled by how it is known. Automated reconstruction: verify items against their sources before relying on them."
         actions={<Button onClick={exportReport}><Download className="h-4 w-4" /> Export report</Button>}
       />
       <div className="border-b border-ink-800 px-6 pt-3">

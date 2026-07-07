@@ -34,6 +34,21 @@ absolute truth. You are responsible for verifying conclusions before relying on
 them in legal, financial, journalistic, or other consequential contexts. The
 Service does not provide legal advice.</p>
 
+<h2>1a. AI accuracy — verification required</h2>
+<p>The Service uses automated extraction and AI assistance. <strong>Answers,
+timelines, and reconstructions can contain errors, omissions, or
+misclassifications.</strong> Every conclusion links to its source evidence so
+you can check it; you agree to verify outputs against the cited sources before
+relying on them for any decision. The Service provides no legal, financial,
+medical, or other professional advice, and no output is a statement of
+established fact unless labeled "observed" and verified by you.</p>
+
+<h2>1b. Guest sessions</h2>
+<p>Guest access creates a temporary account with generated credentials. Guest
+data receives the same isolation as regular accounts but cannot be recovered
+if the session cookie is lost, and may be removed during maintenance. Do not
+use guest sessions for data you need to keep.</p>
+
 <h2>2. Your account</h2>
 <p>You must provide accurate signup information and keep your password secure.
 You are responsible for activity under your account. The Operator may suspend

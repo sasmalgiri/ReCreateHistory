@@ -81,6 +81,19 @@ app.post('/api/auth/login', limitByIp('login', 15, 15 * 60_000), async (req, res
   res.json({ user })
 })
 
+// Guest access: a real, isolated account with generated credentials — no
+// signup friction. Strictly IP-rate-limited (each guest provisions a database).
+app.post('/api/auth/guest', limitByIp('guest', 5, 24 * 60 * 60_000), async (_req, res) => {
+  try {
+    const rand = Math.random().toString(36).slice(2, 10)
+    const user = await users.create(`guest_${Date.now()}_${rand}@guest.local`, `guest-${rand}-${Date.now()}`, 'Guest')
+    setSessionCookie(res, user.id)
+    res.json({ user, guest: true })
+  } catch (err) {
+    res.status(400).json({ error: String((err as Error).message ?? err) })
+  }
+})
+
 app.post('/api/auth/verify-email', limitByIp('verify', 30, 15 * 60_000), async (req, res) => {
   const ok = await users.verifyEmailByToken(String(req.body?.token ?? ''))
   if (!ok) { res.status(400).json({ error: 'Invalid or already-used verification link.' }); return }

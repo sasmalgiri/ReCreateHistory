@@ -124,6 +124,11 @@ function AnswerView({ answer, onFollowUp }: { answer: VerifiedAnswer; onFollowUp
           </div>
         )}
       </Card>
+      <div className="rounded-md border border-amber-900/40 bg-amber-950/20 px-3 py-1.5 text-[11px] leading-relaxed text-amber-200/80">
+        AI-assisted reconstruction from your documents — answers can contain errors or omissions.
+        Verify against the cited sources ("How this was verified", below) before relying on them.
+        Not legal, financial, or professional advice.
+      </div>
       {answer.followUps.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {answer.followUps.map((q, i) => (
