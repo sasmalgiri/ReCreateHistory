@@ -4,13 +4,13 @@
 //
 
 import { useEffect, useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
 import {
   MessagesSquare, Search, CalendarClock, BookOpen, NotebookPen, Bookmark,
   Activity, Library, Contact, Network, ScrollText, Boxes, FolderOpen,
   ListChecks, FileOutput, Settings as SettingsIcon, Loader2, CheckCircle2,
-  Home as HomeIcon, Compass
+  Home as HomeIcon, Compass, Upload
 } from 'lucide-react'
 import { km } from './lib/km'
 
@@ -56,12 +56,12 @@ const NAV = [
 ]
 
 export default function App(): JSX.Element {
-  const [ingest, setIngest] = useState<{ activeCount: number; lastFile: string | null }>({ activeCount: 0, lastFile: null })
+  const [ingest, setIngest] = useState<{ activeCount: number; lastFile: string | null; totalFiles: number }>({ activeCount: 0, lastFile: null, totalFiles: -1 })
   const [onboarding, setOnboarding] = useState(false)
 
   useEffect(() => {
     km.app.status().then((s) => { if (!s.onboardingShown && !s.hasRoots) setOnboarding(true) })
-    km.app.ingestActivity().then((a) => setIngest({ activeCount: a.activeCount, lastFile: a.lastFile }))
+    km.app.ingestActivity().then((a) => setIngest({ activeCount: a.activeCount, lastFile: a.lastFile, totalFiles: a.totalFiles }))
     const off = km.ingest ? subscribeIngest(setIngest) : undefined
     return off
   }, [])
@@ -71,6 +71,7 @@ export default function App(): JSX.Element {
       <Sidebar />
       <main className="flex min-w-0 flex-1 flex-col">
         <IngestBanner activeCount={ingest.activeCount} lastFile={ingest.lastFile} />
+        <EmptyLedgerNudge totalFiles={ingest.totalFiles} />
         <div className="min-h-0 flex-1">
           <Routes>
             {NAV.map((n) => <Route key={n.to} path={n.to} element={n.el} />)}
@@ -87,7 +88,7 @@ export default function App(): JSX.Element {
   )
 }
 
-function subscribeIngest(set: (v: { activeCount: number; lastFile: string | null }) => void): () => void {
+function subscribeIngest(set: (v: { activeCount: number; lastFile: string | null; totalFiles: number }) => void): () => void {
   // The preload exposes ask.onUpdate; ingest ticks arrive on the same push
   // channel under topic 'ingest'. We reuse the generic subscription by
   // listening through a tiny shim on window.
@@ -95,7 +96,7 @@ function subscribeIngest(set: (v: { activeCount: number; lastFile: string | null
   window.addEventListener('message', handler)
   // Poll as a robust fallback (push also updates this).
   const t = setInterval(() => {
-    km.app.ingestActivity().then((a) => set({ activeCount: a.activeCount, lastFile: a.lastFile })).catch(() => {})
+    km.app.ingestActivity().then((a) => set({ activeCount: a.activeCount, lastFile: a.lastFile, totalFiles: a.totalFiles })).catch(() => {})
   }, 1500)
   return () => { window.removeEventListener('message', handler); clearInterval(t) }
 }
@@ -132,6 +133,29 @@ function Sidebar(): JSX.Element {
         local-first · private · Ollama
       </div>
     </aside>
+  )
+}
+
+/** Until the first document is added, every screen tells the user what to do
+ *  first — the app can only answer from documents they put in. */
+function EmptyLedgerNudge({ totalFiles }: { totalFiles: number }): JSX.Element | null {
+  const location = useLocation()
+  const navigate = useNavigate()
+  if (totalFiles !== 0 || location.pathname === '/sources') return null
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-accent/30 bg-accent/10 px-4 py-2">
+      <div className="text-sm text-ink-100">
+        <span className="font-medium text-accent-soft">Start here:</span>{' '}
+        your ledger is empty — ReCreateHistory answers only from documents you add.
+      </div>
+      <button
+        type="button"
+        onClick={() => navigate('/sources')}
+        className="btn-primary shrink-0"
+      >
+        <Upload className="h-4 w-4" /> Add your first documents
+      </button>
+    </div>
   )
 }
 
