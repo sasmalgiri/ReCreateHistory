@@ -32,9 +32,10 @@ export default function AskScreen(): JSX.Element {
     return off
   }, [])
 
-  async function run(): Promise<void> {
-    const q = question.trim()
+  async function run(explicit?: string): Promise<void> {
+    const q = (explicit ?? question).trim()
     if (!q || busy) return
+    if (explicit) setQuestion(explicit)
     setBusy(true); setAnswer(null); setInstant(null); setStage('Starting…'); setAsked(q)
     const { id } = await km.ask.start(q)
     activeID.current = id
@@ -63,7 +64,7 @@ export default function AskScreen(): JSX.Element {
           />
           <div className="mt-2 flex items-center justify-between">
             <div className="text-xs text-ink-500">⌘/Ctrl + Enter to ask</div>
-            <Button variant="primary" onClick={run} disabled={busy || !question.trim()}>
+            <Button variant="primary" onClick={() => run()} disabled={busy || !question.trim()}>
               <Send className="h-4 w-4" /> Ask
             </Button>
           </div>
@@ -80,7 +81,7 @@ export default function AskScreen(): JSX.Element {
           </Card>
         )}
 
-        {answer && <AnswerView answer={answer} />}
+        {answer && <AnswerView answer={answer} onFollowUp={(q) => run(q)} />}
 
         {!busy && !answer && (
           <EmptyState
@@ -94,7 +95,7 @@ export default function AskScreen(): JSX.Element {
   )
 }
 
-function AnswerView({ answer }: { answer: VerifiedAnswer }): JSX.Element {
+function AnswerView({ answer, onFollowUp }: { answer: VerifiedAnswer; onFollowUp: (q: string) => void }): JSX.Element {
   if (answer.refused) {
     return (
       <Card>
@@ -103,27 +104,48 @@ function AnswerView({ answer }: { answer: VerifiedAnswer }): JSX.Element {
       </Card>
     )
   }
+  // The answer IS the product. It gets the stage; verification mechanics live
+  // behind one quiet disclosure for whoever wants to audit them.
   return (
     <div className="space-y-4">
-      <Card>
-        <div className="whitespace-pre-wrap text-sm leading-relaxed text-ink-100">{answer.body}</div>
-      </Card>
-      <QualityStrip answer={answer} />
-      {answer.citations.length > 0 && (
-        <Card title={`Citations (${answer.citations.length})`}>
-          <div className="space-y-2">
-            {answer.citations.map((c, i) => (
-              <div key={i} className="flex items-start gap-2 rounded-md border border-ink-800 bg-ink-900/50 px-3 py-2 text-xs">
-                <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-500" />
-                <div>
-                  <div className="text-ink-300">{c.snippet}</div>
-                  <div className="mt-0.5 text-ink-600">{c.eventID ? 'event' : 'document'} · {c.objectID.slice(0, 8)}</div>
-                </div>
-              </div>
-            ))}
+      <Card className="p-5">
+        <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-ink-50">{answer.body}</div>
+        {answer.gaps.length > 0 && (
+          <div className="mt-3 border-t border-ink-800 pt-2 text-xs text-ink-500">
+            Not in your sources: {answer.gaps.join('; ')}
           </div>
-        </Card>
+        )}
+      </Card>
+      {answer.followUps.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {answer.followUps.map((q, i) => (
+            <button key={i} type="button" onClick={() => onFollowUp(q)} className="chip hover:border-accent hover:text-accent-soft">{q}</button>
+          ))}
+        </div>
       )}
+      <details className="group">
+        <summary className="cursor-pointer select-none text-xs text-ink-500 hover:text-ink-300">
+          How this was verified · {answer.citations.length} source{answer.citations.length === 1 ? '' : 's'}
+        </summary>
+        <div className="mt-3 space-y-4">
+          <QualityStrip answer={answer} />
+          {answer.citations.length > 0 && (
+            <Card title={`Citations (${answer.citations.length})`}>
+              <div className="space-y-2">
+                {answer.citations.map((c, i) => (
+                  <div key={i} className="flex items-start gap-2 rounded-md border border-ink-800 bg-ink-900/50 px-3 py-2 text-xs">
+                    <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-500" />
+                    <div>
+                      <div className="text-ink-300">{c.snippet}</div>
+                      <div className="mt-0.5 text-ink-600">{c.eventID ? 'event' : 'document'} · {c.objectID.slice(0, 8)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      </details>
     </div>
   )
 }

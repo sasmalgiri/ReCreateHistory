@@ -92,6 +92,18 @@ const api: KalsmritikoshApi = {
   live: {
     sample: () => call('live.sample')
   },
+  ledger: {
+    blocks: (objectID) => call('ledger.blocks', objectID),
+    claims: (objectID, limit) => call('ledger.claims', objectID, limit),
+    contradictions: () => call('ledger.contradictions'),
+    contradictionDetail: (id) => call('ledger.contradictionDetail', id),
+    missingProof: () => call('ledger.missingProof'),
+    factMatrix: () => call('ledger.factMatrix'),
+    ingestionRuns: (limit) => call('ledger.ingestionRuns', limit),
+    eventsByStatus: (status, limit) => call('ledger.eventsByStatus', status, limit),
+    reviewEvent: (id, status) => call('ledger.reviewEvent', id, status),
+    exportReport: () => call('ledger.exportReport')
+  },
   convert: {
     file: (p) => call('convert.file', p),
     text: (t, from, to) => call('convert.text', t, from, to)

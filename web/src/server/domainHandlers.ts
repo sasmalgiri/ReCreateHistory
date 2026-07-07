@@ -180,6 +180,44 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
       }
     },
 
+    // ── evidence ledger ──
+    'ledger.blocks': async (objectID: UUID) => app.repos.blocks.byObject(objectID),
+    'ledger.claims': async (objectID?: UUID, limit?: number) => app.repos.claims.list(objectID, limit ?? 300),
+    'ledger.contradictions': async () => app.repos.contradictions.list(),
+    'ledger.contradictionDetail': async (id: UUID) => {
+      const contradiction = app.repos.contradictions.byID(id)
+      if (!contradiction) return { contradiction: null, a: null, b: null }
+      return {
+        contradiction,
+        a: contradiction.aKind === 'event' ? app.repos.events.byID(contradiction.aID) : null,
+        b: contradiction.bKind === 'event' ? app.repos.events.byID(contradiction.bID) : null
+      }
+    },
+    'ledger.missingProof': async () => {
+      const { missingProof } = await import('./knowledge/factStatus')
+      return missingProof(app.repos)
+    },
+    'ledger.factMatrix': async () => {
+      const { factMatrix } = await import('./knowledge/factStatus')
+      return factMatrix(app.repos)
+    },
+    'ledger.ingestionRuns': async (limit?: number) => app.repos.ingestionRuns.list(limit ?? 100),
+    'ledger.eventsByStatus': async (status?: string, limit?: number) =>
+      app.repos.events.byStatus(status as never, limit ?? 300),
+    'ledger.reviewEvent': async (id: UUID, status: 'accepted' | 'rejected') => {
+      const prior = app.repos.events.byID(id)
+      // Append-only review ledger (spec 12.9) + current-state flag on the event.
+      app.repos.reviews.add({
+        targetKind: 'event', targetID: id, action: status,
+        priorValue: prior?.reviewStatus ?? null, newValue: status
+      })
+      app.repos.events.setReview(id, status)
+    },
+    'ledger.exportReport': async () => {
+      const { buildChronologyReport } = await import('./knowledge/reportBuilder')
+      return { markdown: buildChronologyReport(app.repos) }
+    },
+
     // ── convert ──
     'convert.file': async (path: string) => {
       const st = detectSourceType(path)

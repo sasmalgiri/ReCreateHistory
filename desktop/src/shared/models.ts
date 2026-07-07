@@ -135,7 +135,19 @@ export interface KEvent {
   attributes: Record<string, unknown>
   qualityTier: QualityTier
   datePrecision: DatePrecision
+  /** Fact Status Matrix: how this event is known.
+   *  observed = structured source (email header, log, timestamp);
+   *  asserted = stated in body text; derived = computed from stated facts;
+   *  inferred = indirect (e.g. file mtime); contradicted; unsupported. */
+  epistemicStatus: EpistemicStatus
+  /** Distinct source documents backing this event. */
+  corroborationCount: number
+  statusReason?: string | null
+  reviewStatus: 'unreviewed' | 'accepted' | 'rejected'
 }
+
+export type EpistemicStatus =
+  | 'observed' | 'asserted' | 'derived' | 'inferred' | 'contradicted' | 'unsupported'
 
 // ── Relationships (graph edges) ─────────────────────────────────────────
 
@@ -315,4 +327,83 @@ export function sourceCategory(t: SourceType): SourceCategory {
     case 'html': case 'json': return 'web'
     default: return 'unknown'
   }
+}
+
+// ── Evidence Ledger objects (v28–v31) ───────────────────────────────────
+
+export type BlockType =
+  | 'paragraph' | 'heading' | 'table_row' | 'email_message' | 'image'
+  | 'ocr_text' | 'code' | 'log_event'
+
+export type ExtractionMethod = 'native' | 'ocr' | 'vision' | 'asr' | 'manual'
+
+export interface EvidenceBlock {
+  id: UUID
+  objectID: UUID
+  ordinal: number
+  blockType: BlockType
+  text?: string | null
+  structuredData: Record<string, unknown>
+  page?: number | null
+  sheet?: string | null
+  rowNum?: number | null
+  charStart?: number | null
+  charEnd?: number | null
+  sectionPath: string[]
+  /** Human-readable anchor, e.g. "contract.pdf, page 8, Payment Terms". */
+  citation: string
+  extractionMethod: ExtractionMethod
+  extractionConfidence: number
+  createdAt: Timestamp
+}
+
+export type ClaimType =
+  | 'statement' | 'obligation' | 'date_assertion' | 'amount' | 'communication'
+
+export interface LedgerClaim {
+  id: UUID
+  claimText: string
+  claimType: ClaimType
+  assertedBy?: string | null
+  sourceObjectID: UUID
+  evidenceBlockIDs: UUID[]
+  confidence: Confidence
+  extractionMethod: string
+  createdAt: Timestamp
+}
+
+export interface LedgerContradiction {
+  id: UUID
+  kind: string
+  aKind: 'event' | 'claim'
+  aID: UUID
+  bKind: 'event' | 'claim'
+  bID: UUID
+  explanation: string
+  resolutionStatus: 'unresolved' | 'resolved' | 'dismissed'
+  detectedAt: Timestamp
+}
+
+export interface IngestionRun {
+  id: UUID
+  fileID: UUID
+  parser: string
+  status: 'parsing' | 'indexed' | 'low_confidence' | 'failed' | 'unsupported' | 'needs_ocr' | 'duplicate'
+  blocks: number
+  chunks: number
+  tableRows: number
+  claims: number
+  embeddings: number
+  warnings: string[]
+  startedAt: Timestamp
+  finishedAt?: Timestamp | null
+}
+
+export interface TableRow {
+  id: UUID
+  objectID: UUID
+  sheet?: string | null
+  rowNum: number
+  columns: Record<string, string>
+  createdAt: Timestamp
 }

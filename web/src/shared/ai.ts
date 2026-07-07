@@ -199,6 +199,8 @@ export interface ConfidenceReport {
   droppedUnverifiable: number
   agreement: number
   diversity: number
+  /** 0..1 — how completely the answer addresses the question given the evidence. */
+  coverage: number
 }
 
 export interface ReasoningTraceStep {
@@ -217,6 +219,10 @@ export interface ReasoningTrace {
 
 export interface VerifiedAnswer {
   body: string
+  /** Spec §18 classification: Proven by direct evidence / Supported by
+   *  multiple sources / Supported by a single source / Derived / Inferred /
+   *  Contradicted / Unsupported / Inconclusive. */
+  classification?: string | null
   answerText?: string | null
   intentKind?: string | null
   citations: Citation[]
@@ -228,6 +234,10 @@ export interface VerifiedAnswer {
   walkSteps: WalkStep[]
   source: AnswerSource
   reasoningTrace?: ReasoningTrace | null
+  /** What the sources do NOT answer — surfaced honestly instead of guessing. */
+  gaps: string[]
+  /** Grounded next questions the ledger can actually answer. */
+  followUps: string[]
 }
 
 // ── Provider status (surfaced to Settings) ──────────────────────────────

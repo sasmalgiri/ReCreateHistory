@@ -6,7 +6,8 @@
 
 import type {
   KnowledgeObject, Entity, KEvent, Relationship, MemoryObject, Summary,
-  Assertion, EventLink, FileRow, UUID, SourceCategory
+  Assertion, EventLink, FileRow, UUID, SourceCategory, EvidenceBlock,
+  LedgerClaim, LedgerContradiction, IngestionRun, EpistemicStatus
 } from './models'
 import type {
   VerifiedAnswer, ProviderStatus, RetrievalResult, UserIntent
@@ -172,6 +173,29 @@ export interface OllamaModelInfo {
   family?: string
 }
 
+// ── Evidence ledger DTOs ────────────────────────────────────────────────
+
+export interface MissingProofItem {
+  kind: 'single_source' | 'unfulfilled_obligation' | 'timeline_gap' | 'low_confidence_date'
+  description: string
+  relatedEventID?: UUID | null
+  relatedClaimID?: UUID | null
+  severity: 'info' | 'warn'
+}
+
+export interface FactMatrix {
+  observed: number
+  asserted: number
+  derived: number
+  inferred: number
+  contradicted: number
+  unsupported: number
+  totalEvents: number
+  corroborated: number
+  contradictions: number
+  missingProof: number
+}
+
 // ── Ask streaming updates ───────────────────────────────────────────────
 
 export type AskUpdate =
@@ -260,6 +284,18 @@ export interface KalsmritikoshApi {
   }
   live: {
     sample(): Promise<LiveSample>
+  }
+  ledger: {
+    blocks(objectID: UUID): Promise<EvidenceBlock[]>
+    claims(objectID?: UUID, limit?: number): Promise<LedgerClaim[]>
+    contradictions(): Promise<LedgerContradiction[]>
+    contradictionDetail(id: UUID): Promise<{ contradiction: LedgerContradiction; a: KEvent | null; b: KEvent | null }>
+    missingProof(): Promise<MissingProofItem[]>
+    factMatrix(): Promise<FactMatrix>
+    ingestionRuns(limit?: number): Promise<IngestionRun[]>
+    eventsByStatus(status?: EpistemicStatus, limit?: number): Promise<KEvent[]>
+    reviewEvent(id: UUID, status: 'accepted' | 'rejected'): Promise<void>
+    exportReport(): Promise<{ markdown: string }>
   }
   convert: {
     file(path: string): Promise<{ text: string; sourceType: string }>

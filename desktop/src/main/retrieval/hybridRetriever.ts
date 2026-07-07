@@ -16,6 +16,18 @@ import { log } from '../core/logger'
 
 const RRF_K = 60
 
+const QUERY_STOP = new Set([
+  'the', 'and', 'was', 'were', 'what', 'when', 'who', 'which', 'how', 'why',
+  'where', 'did', 'does', 'have', 'has', 'had', 'that', 'this', 'with', 'from',
+  'for', 'are', 'about', 'tell', 'give', 'show', 'happened', 'between', 'their',
+  'them', 'they', 'there', 'will', 'would', 'could', 'should'
+])
+
+function contentWords(text: string): string[] {
+  return [...new Set((text.toLowerCase().match(/[a-z][a-z0-9&.-]{3,}/g) ?? [])
+    .filter((w) => !QUERY_STOP.has(w)))]
+}
+
 export class HybridRetriever {
   constructor(private repos: Repos, private capabilities: CapabilityRegistry) {}
 
@@ -31,6 +43,14 @@ export class HybridRetriever {
     const hinted: Entity[] = []
     for (const hint of intent.entityHints) {
       for (const e of this.repos.entities.search(hint, 3)) {
+        if (!entities.has(e.id)) { entities.set(e.id, e); hinted.push(e) }
+      }
+    }
+    // Recall: also match EVERY content word of the question against the entity
+    // table — capitalized-hint detection misses lowercase mentions ("acme"),
+    // and thin evidence is exactly when the LLM leaks trained knowledge.
+    for (const w of contentWords(question).slice(0, 10)) {
+      for (const e of this.repos.entities.search(w, 2)) {
         if (!entities.has(e.id)) { entities.set(e.id, e); hinted.push(e) }
       }
     }
@@ -58,9 +78,18 @@ export class HybridRetriever {
     }
 
     // ── FTS (metadata) + Vector fused via RRF ─────────────────────────
-    const ftsRanks: { chunkID: UUID; rank: number }[] =
-      layers.includes('metadata') ? this.repos.chunks.ftsSearch(question, 40) : []
-    if (layers.includes('metadata')) layersUsed.push('metadata')
+    // Precision→recall ladder: strict AND first (all content terms in one
+    // chunk), OR fallback when that under-delivers.
+    let ftsRanks: { chunkID: UUID; rank: number }[] = []
+    if (layers.includes('metadata')) {
+      layersUsed.push('metadata')
+      ftsRanks = this.repos.chunks.ftsSearch(question, 40, 'and')
+      if (ftsRanks.length < 3) {
+        const orRanks = this.repos.chunks.ftsSearch(question, 40, 'or')
+        const seen = new Set(ftsRanks.map((r) => r.chunkID))
+        ftsRanks = [...ftsRanks, ...orRanks.filter((r) => !seen.has(r.chunkID))]
+      }
+    }
 
     let vecRanks: { chunkID: UUID; score: number }[] = []
     if (layers.includes('vector')) {
@@ -76,6 +105,35 @@ export class HybridRetriever {
     for (const f of fused) {
       const c = chunkMap.get(f.chunkID)
       if (c) chunks.push({ chunk: c, score: f.score, viaLayer: f.via })
+    }
+    // Dynamic context expansion: small atomic chunks at ingest, wider context
+    // at query time. For the top hits, pull the previous/next chunk of the
+    // same document so a retrieved clause arrives with its surroundings
+    // ("If cancellation occurs within 7 days, " + "the penalty is waived.").
+    {
+      const have = new Set(chunks.map((rc) => rc.chunk.id))
+      for (const top of chunks.slice(0, 5)) {
+        const siblings = this.repos.chunks.byObject(top.chunk.objectID)
+        for (const delta of [-1, 1]) {
+          const n = siblings.find((c) => c.ordinal === top.chunk.ordinal + delta)
+          if (n && !have.has(n.id)) {
+            have.add(n.id)
+            chunks.push({ chunk: n, score: top.score * 0.5, viaLayer: top.viaLayer })
+          }
+        }
+      }
+    }
+    // Backfill: when text evidence is thin but structured events matched, pull
+    // the chunks of the events' source documents so the synthesizer always has
+    // the surrounding text — not just one-line event titles.
+    if (chunks.length < 5 && events.size > 0) {
+      const have = new Set(chunks.map((rc) => rc.chunk.id))
+      const objIDs = [...new Set([...events.values()].slice(0, 4).map((e) => e.sourceObjectID))]
+      for (const oid of objIDs) {
+        for (const c of this.repos.chunks.byObject(oid).slice(0, 3)) {
+          if (!have.has(c.id)) { have.add(c.id); chunks.push({ chunk: c, score: 0.01, viaLayer: 'entity' }) }
+        }
+      }
     }
 
     // ── Summary ───────────────────────────────────────────────────────

@@ -57,17 +57,18 @@ export function extractEvents(content: string, opts: {
     })
   }
 
-  // 2. Body-text dated events (T2).
+  // 2. Body-text dated events (T2). The title is the FULL sentence containing
+  // the date — snapped to real sentence/word boundaries so answers never show
+  // mid-word fragments like "d to May 2025".
   const dates = parseDates(content, 8)
   for (const d of dates) {
-    const ctxStart = Math.max(0, d.index - 80)
-    const ctxEnd = Math.min(content.length, d.index + 120)
-    const ctx = content.slice(ctxStart, ctxEnd).replace(/\s+/g, ' ').trim()
+    const sentence = sentenceAround(content, d.index)
+    const ctx = sentence || content.slice(Math.max(0, d.index - 80), d.index + 120).replace(/\s+/g, ' ').trim()
     out.push({
       kind: kindForContext(ctx),
       date: d.ms,
-      title: firstSentence(ctx) || `Event on ${new Date(d.ms).toISOString().slice(0, 10)}`,
-      summary: ctx,
+      title: (sentence || `Event on ${new Date(d.ms).toISOString().slice(0, 10)}`).slice(0, 180),
+      summary: ctx.slice(0, 280),
       confidence: 0.6,
       dateConfidence: 0.7,
       qualityTier: 'T2',
@@ -91,7 +92,27 @@ export function extractEvents(content: string, opts: {
   return out
 }
 
-function firstSentence(s: string): string {
-  const m = s.match(/[^.!?]{8,140}[.!?]?/)
-  return (m?.[0] ?? s).trim().slice(0, 140)
+/** The complete sentence containing `index`, bounded to sane length. Falls
+ *  back to a word-boundary-snapped window when no sentence markers exist. */
+function sentenceAround(content: string, index: number): string {
+  const windowStart = Math.max(0, index - 300)
+  const windowEnd = Math.min(content.length, index + 300)
+  const before = content.slice(windowStart, index)
+  const after = content.slice(index, windowEnd)
+
+  // Sentence start: after the last ".!?"+space or blank line before the date.
+  // Single newlines are hard line-wraps in most documents, NOT sentence ends.
+  const sm = before.match(/[\s\S]*(?:[.!?]\s+|\n{2,})/)
+  const start = sm ? windowStart + sm[0].length : windowStart
+  // Sentence end: at the first ".!?" (followed by space/end) or blank line.
+  const em = after.match(/[.!?](?=\s|$)|\n{2,}/)
+  const end = em && em.index !== undefined
+    ? index + em.index + (em[0].length === 1 ? 1 : 0)
+    : windowEnd
+
+  let s = content.slice(start, end).replace(/\s+/g, ' ').trim()
+  // If we hit the raw window edge (no boundary found), snap partial words off.
+  if (start === windowStart && windowStart > 0) s = s.replace(/^\S*\s+/, '')
+  if (end === windowEnd && windowEnd < content.length) s = s.replace(/\s+\S*$/, '')
+  return s.length >= 12 ? s : ''
 }

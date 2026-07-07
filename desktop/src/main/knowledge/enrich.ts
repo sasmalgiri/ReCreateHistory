@@ -77,6 +77,24 @@ export function enrichObject(
     eventIDs.push(inserted.id)
   }
 
+  // ── Aliases (ENTITY_ALIAS_OF): "Alice Smith <alice@acme.com>" links the
+  // person entity to the address, so either surface resolves the same node.
+  if (isEmail) {
+    for (const field of ['from', 'to', 'cc']) {
+      const raw = String(metadata[field] ?? '')
+      for (const m of raw.matchAll(/([A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*)+)\s*<([^>]+)>/g)) {
+        const name = m[1].trim()
+        const email = m[2].trim().toLowerCase()
+        const personID = idByNorm.get(name.toLowerCase())
+        if (personID && email.includes('@')) {
+          repos.entities.addAlias(personID, email, 'email-header')
+          const emailID = idByNorm.get(email)
+          if (emailID) repos.entities.addAlias(emailID, name.toLowerCase(), 'email-header')
+        }
+      }
+    }
+  }
+
   // ── Relationships ─────────────────────────────────────────────────────
   let relCount = 0
   // Email: from → to  (emailed edge).

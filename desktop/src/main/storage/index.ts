@@ -9,7 +9,8 @@ import { VectorStore } from './vectorStore'
 import {
   FilesRepo, ObjectsRepo, ChunksRepo, EntitiesRepo, EventsRepo, RelationshipsRepo,
   MemoryRepo, SummariesRepo, ConversationsRepo, SavedQueriesRepo, InvestigationsRepo,
-  AssertionsRepo, EventLinksRepo
+  AssertionsRepo, EventLinksRepo, BlocksRepo, ClaimsRepo, ContradictionsRepo,
+  IngestionRunsRepo, TableRowsRepo, ReviewsRepo, AnswerAuditsRepo
 } from './repositories'
 
 export class Repos {
@@ -28,6 +29,14 @@ export class Repos {
   readonly assertions: AssertionsRepo
   readonly eventLinks: EventLinksRepo
   readonly vectors: VectorStore
+  // Evidence Ledger (v28–v31)
+  readonly blocks: BlocksRepo
+  readonly claims: ClaimsRepo
+  readonly contradictions: ContradictionsRepo
+  readonly ingestionRuns: IngestionRunsRepo
+  readonly tableRows: TableRowsRepo
+  readonly reviews: ReviewsRepo
+  readonly answerAudits: AnswerAuditsRepo
 
   constructor(dbPath: string) {
     this.ledger = new Ledger(dbPath)
@@ -46,6 +55,13 @@ export class Repos {
     this.assertions = new AssertionsRepo(this.ledger)
     this.eventLinks = new EventLinksRepo(this.ledger)
     this.vectors = new VectorStore(this.ledger)
+    this.blocks = new BlocksRepo(this.ledger)
+    this.claims = new ClaimsRepo(this.ledger)
+    this.contradictions = new ContradictionsRepo(this.ledger)
+    this.ingestionRuns = new IngestionRunsRepo(this.ledger)
+    this.tableRows = new TableRowsRepo(this.ledger)
+    this.reviews = new ReviewsRepo(this.ledger)
+    this.answerAudits = new AnswerAuditsRepo(this.ledger)
   }
 
   close(): void {

@@ -9,7 +9,7 @@ import type { VerifiedAnswer } from '../../../shared/ai'
 import { answerSourceDisplay } from '../../../shared/ai'
 import { Badge, Meter } from './ui'
 import { confidenceLabel, fmtPct } from '../lib/format'
-import { AlertTriangle, ShieldCheck, FileText, CalendarClock } from 'lucide-react'
+import { AlertTriangle, ShieldCheck, FileText, CalendarClock, ListChecks } from 'lucide-react'
 
 export function QualityStrip({ answer }: { answer: VerifiedAnswer }): JSX.Element {
   const c = confidenceLabel(answer.confidence)
@@ -17,11 +17,21 @@ export function QualityStrip({ answer }: { answer: VerifiedAnswer }): JSX.Elemen
   return (
     <div className="card space-y-3 p-4">
       <div className="flex flex-wrap items-center gap-2">
+        {answer.classification && (
+          <Badge tone={answer.classification.startsWith('Proven') ? 'high' : answer.classification === 'Contradicted' ? 'low' : answer.classification.startsWith('Supported by multiple') ? 'high' : 'medium'}>
+            {answer.classification}
+          </Badge>
+        )}
         <Badge tone="accent">{answerSourceDisplay[answer.source]}</Badge>
         <Badge tone={c.tone}>
           <ShieldCheck className="h-3 w-3" /> {c.label} confidence · {fmtPct(answer.confidence)}
         </Badge>
         <Badge tone="neutral"><FileText className="h-3 w-3" /> {answer.citations.length} citations</Badge>
+        {r ? (
+          <Badge tone={r.coverage >= 0.7 ? 'high' : r.coverage >= 0.4 ? 'medium' : 'low'}>
+            <ListChecks className="h-3 w-3" /> {fmtPct(r.coverage)} complete
+          </Badge>
+        ) : null}
         {r?.eventCount ? <Badge tone="neutral"><CalendarClock className="h-3 w-3" /> {r.eventCount} events</Badge> : null}
         {answer.contradictions.length > 0 && (
           <Badge tone="low"><AlertTriangle className="h-3 w-3" /> {answer.contradictions.length} conflict(s)</Badge>
@@ -33,7 +43,7 @@ export function QualityStrip({ answer }: { answer: VerifiedAnswer }): JSX.Elemen
           <Stat label="Evidence" value={String(r.evidenceCount)} />
           <Stat label="Entities" value={String(r.entityCount)} />
           <Stat label="Freshness" value={r.freshnessDays != null ? `${r.freshnessDays}d` : '—'} />
-          <Stat label="Coverage" value={r.temporalCoverageDays != null ? `${r.temporalCoverageDays}d` : '—'} />
+          <Stat label="Time span" value={r.temporalCoverageDays != null ? `${r.temporalCoverageDays}d` : '—'} />
         </div>
       )}
       {answer.contradictions.length > 0 && (

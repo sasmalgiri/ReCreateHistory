@@ -4,7 +4,7 @@
 // user_version and is applied exactly once inside a SAVEPOINT.
 //
 
-export const LATEST_SCHEMA_VERSION = 27
+export const LATEST_SCHEMA_VERSION = 32
 
 const v1 = `
 CREATE TABLE IF NOT EXISTS files (
@@ -421,9 +421,183 @@ CREATE INDEX IF NOT EXISTS idx_assertions_recorded ON assertions(recorded_at DES
 CREATE INDEX IF NOT EXISTS idx_assertions_current ON assertions(retracted_at) WHERE retracted_at IS NULL;
 `
 
+
+// MARK: - v28 — Evidence blocks + ingestion-run ledger (Evidence Ledger arch)
+//
+// Parsers now emit structured EvidenceBlocks (paragraph / heading / table_row /
+// email_message / ...) each carrying its location anchor, citation string,
+// extraction method, and extraction confidence. ingestion_runs is the
+// append-only record of what happened to every file (parser, counts, warnings)
+// so ingestion is debuggable and auditable.
+
+const v28 = `
+CREATE TABLE evidence_blocks (
+    id TEXT PRIMARY KEY NOT NULL,
+    object_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    block_type TEXT NOT NULL,
+    text TEXT,
+    structured_json TEXT NOT NULL DEFAULT '{}',
+    page INTEGER,
+    sheet TEXT,
+    row_num INTEGER,
+    char_start INTEGER,
+    char_end INTEGER,
+    section_path_json TEXT NOT NULL DEFAULT '[]',
+    citation TEXT NOT NULL,
+    extraction_method TEXT NOT NULL DEFAULT 'native',
+    extraction_confidence REAL NOT NULL DEFAULT 1.0,
+    created_at REAL NOT NULL,
+    FOREIGN KEY (object_id) REFERENCES knowledge_objects(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_blocks_object ON evidence_blocks(object_id, ordinal);
+CREATE INDEX idx_blocks_type ON evidence_blocks(block_type);
+
+CREATE TABLE ingestion_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    file_id TEXT NOT NULL,
+    parser TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'parsing',
+    blocks INTEGER NOT NULL DEFAULT 0,
+    chunks INTEGER NOT NULL DEFAULT 0,
+    table_rows INTEGER NOT NULL DEFAULT 0,
+    claims INTEGER NOT NULL DEFAULT 0,
+    embeddings INTEGER NOT NULL DEFAULT 0,
+    warnings_json TEXT NOT NULL DEFAULT '[]',
+    started_at REAL NOT NULL,
+    finished_at REAL,
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_runs_file ON ingestion_runs(file_id, started_at DESC);
+`
+
+// MARK: - v29 — Claims ledger (the layer between evidence and events)
+//
+// A claim is "who/what asserted X, in which document, backed by which
+// evidence blocks". Deterministically extracted (rule-based); FTS-indexed so
+// retrieval can match question-shaped queries against claim text.
+
+const v29 = `
+CREATE TABLE claims (
+    id TEXT PRIMARY KEY NOT NULL,
+    claim_text TEXT NOT NULL,
+    claim_type TEXT NOT NULL DEFAULT 'statement',
+    asserted_by TEXT,
+    source_object_id TEXT NOT NULL,
+    evidence_block_ids_json TEXT NOT NULL DEFAULT '[]',
+    confidence REAL NOT NULL DEFAULT 0.5,
+    extraction_method TEXT NOT NULL DEFAULT 'rule',
+    created_at REAL NOT NULL,
+    FOREIGN KEY (source_object_id) REFERENCES knowledge_objects(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_claims_object ON claims(source_object_id);
+CREATE INDEX idx_claims_type ON claims(claim_type);
+
+CREATE VIRTUAL TABLE claims_fts USING fts5(
+    claim_text, content='claims', content_rowid='rowid', tokenize='porter unicode61'
+);
+CREATE TRIGGER claims_fts_ai AFTER INSERT ON claims BEGIN
+    INSERT INTO claims_fts(rowid, claim_text) VALUES (new.rowid, new.claim_text);
+END;
+CREATE TRIGGER claims_fts_ad AFTER DELETE ON claims BEGIN
+    INSERT INTO claims_fts(claims_fts, rowid, claim_text) VALUES('delete', old.rowid, old.claim_text);
+END;
+`
+
+// MARK: - v30 — Fact Status Matrix on events + persisted contradiction ledger
+//
+// epistemic_status: observed (structured source: header/log/timestamp) |
+// asserted (stated in body text) | derived (computed from stated facts) |
+// inferred (mtime fallback / indirect) | contradicted | unsupported.
+// corroboration_count = distinct source documents backing the same event.
+// Contradictions are LEDGER rows now — surfaced, never averaged away, and
+// they survive across sessions instead of being recomputed per answer.
+
+const v30 = `
+ALTER TABLE events ADD COLUMN epistemic_status TEXT NOT NULL DEFAULT 'asserted';
+ALTER TABLE events ADD COLUMN corroboration_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE events ADD COLUMN status_reason TEXT;
+ALTER TABLE events ADD COLUMN review_status TEXT NOT NULL DEFAULT 'unreviewed';
+CREATE INDEX IF NOT EXISTS idx_events_epistemic ON events(epistemic_status);
+
+CREATE TABLE contradictions (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL,
+    a_kind TEXT NOT NULL,
+    a_id TEXT NOT NULL,
+    b_kind TEXT NOT NULL,
+    b_id TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    resolution_status TEXT NOT NULL DEFAULT 'unresolved',
+    detected_at REAL NOT NULL,
+    UNIQUE(a_id, b_id, kind)
+);
+CREATE INDEX idx_contra_a ON contradictions(a_id);
+CREATE INDEX idx_contra_b ON contradictions(b_id);
+`
+
+// MARK: - v31 — Structured table rows (spreadsheets are data, not prose)
+//
+// CSV/XLSX rows are stored with their column structure so table questions
+// ("which row has the highest amount?") answer from structure, not embeddings.
+
+const v31 = `
+CREATE TABLE table_rows (
+    id TEXT PRIMARY KEY NOT NULL,
+    object_id TEXT NOT NULL,
+    sheet TEXT,
+    row_num INTEGER NOT NULL,
+    columns_json TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    FOREIGN KEY (object_id) REFERENCES knowledge_objects(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_table_rows_object ON table_rows(object_id, row_num);
+`
+
+// MARK: - v32 - Append-only review ledger + answer audit ledger (spec 12.9/12.10)
+//
+// Human corrections never overwrite history: every accept/reject/correct is a
+// new review row. Every answer is audited: question, evidence used, citations,
+// classification, confidence - reproducibility for court/investigation use.
+
+const v32 = `
+CREATE TABLE reviews (
+    id TEXT PRIMARY KEY NOT NULL,
+    target_kind TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    prior_value TEXT,
+    new_value TEXT,
+    reason TEXT,
+    reviewer TEXT NOT NULL DEFAULT 'user',
+    created_at REAL NOT NULL
+);
+CREATE INDEX idx_reviews_target ON reviews(target_id);
+
+CREATE TABLE answer_audits (
+    id TEXT PRIMARY KEY NOT NULL,
+    question TEXT NOT NULL,
+    intent_kind TEXT,
+    classification TEXT,
+    answer_body TEXT NOT NULL,
+    citations_json TEXT NOT NULL DEFAULT '[]',
+    contradictions INTEGER NOT NULL DEFAULT 0,
+    gaps_json TEXT NOT NULL DEFAULT '[]',
+    confidence REAL NOT NULL DEFAULT 0,
+    source TEXT,
+    llm_purposes_json TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL
+);
+CREATE INDEX idx_answer_audits_created ON answer_audits(created_at DESC);
+
+ALTER TABLE claims ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE claims ADD COLUMN refuting_evidence_json TEXT NOT NULL DEFAULT '[]';
+`
+
 export const MIGRATIONS: [number, string][] = [
+
   [1, v1], [2, v2], [3, v3], [4, v4], [5, v5], [6, v6], [7, v7], [8, v8], [9, v9],
   [10, v10], [11, v11], [12, v12], [13, v13], [14, v14], [15, v15], [16, v16],
   [17, v17], [18, v18], [19, v19], [20, v20], [21, v21], [22, v22], [23, v23],
-  [24, v24], [25, v25], [26, v26], [27, v27]
+  [24, v24], [25, v25], [26, v26], [27, v27], [28, v28], [29, v29], [30, v30], [31, v31], [32, v32]
 ]

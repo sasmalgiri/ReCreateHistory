@@ -10,7 +10,9 @@ import { newID, nowMs } from '../core/ids'
 import type {
   FileRow, KnowledgeObject, Chunk, Entity, KEvent, Relationship, MemoryObject,
   Summary, Assertion, EventLink, SourceType, EntityKind, EventKind, QualityTier,
-  RelationshipKind, SubjectKind, UUID
+  RelationshipKind, SubjectKind, UUID, EvidenceBlock, LedgerClaim, ClaimType,
+  LedgerContradiction, IngestionRun, TableRow, EpistemicStatus, BlockType,
+  ExtractionMethod
 } from '../../shared/models'
 import { DatePrecision } from '../../shared/models'
 
@@ -30,11 +32,19 @@ export class FilesRepo {
     if (existing) return existing
     const id = row.id ?? newID()
     this.L.db.prepare(
-      `INSERT INTO files (id,url,source_type,size_bytes,modified_at,ingested_at,content_hash,availability)
-       VALUES (?,?,?,?,?,?,?,?)`
+      `INSERT INTO files (id,url,source_type,size_bytes,modified_at,ingested_at,content_hash,availability,alias_of)
+       VALUES (?,?,?,?,?,?,?,?,?)`
     ).run(id, row.url, row.sourceType, row.sizeBytes, row.modifiedAt,
-      row.ingestedAt ?? null, row.contentHash ?? null, row.availability ?? 'available')
+      row.ingestedAt ?? null, row.contentHash ?? null, row.availability ?? 'available', row.aliasOf ?? null)
     return { ...row, id }
+  }
+
+  /** Exact-duplicate lookup: same SHA-256 already ingested (dedup, spec step 4). */
+  byHash(hash: string): FileRow | null {
+    const r = this.L.db.prepare(
+      `SELECT * FROM files WHERE content_hash=? AND ingested_at IS NOT NULL AND alias_of IS NULL LIMIT 1`
+    ).get(hash) as any
+    return r ? mapFile(r) : null
   }
 
   markIngested(id: UUID): void {
@@ -154,9 +164,11 @@ export class ChunksRepo {
   count(): number {
     return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM chunks`).get() as any).c)
   }
-  /** FTS search over chunk text. Returns chunkID + bm25 rank (lower = better). */
-  ftsSearch(query: string, limit = 40): { chunkID: UUID; rank: number }[] {
-    const match = toFtsMatch(query)
+  /** FTS search over chunk text. Returns chunkID + bm25 rank (lower = better).
+   *  mode 'and' requires all content terms in a chunk (precision); 'or' is the
+   *  recall fallback. The retriever runs the AND→OR ladder. */
+  ftsSearch(query: string, limit = 40, mode: 'and' | 'or' = 'or'): { chunkID: UUID; rank: number }[] {
+    const match = toFtsMatch(query, mode)
     if (!match) return []
     try {
       const rows = this.L.db.prepare(
@@ -181,11 +193,21 @@ function mapChunk(r: any): Chunk {
   }
 }
 
-/** Turn free text into a safe FTS5 MATCH expression (OR of prefix terms). */
-export function toFtsMatch(query: string): string | null {
-  const terms = query.toLowerCase().match(/[a-z0-9]+/g)
-  if (!terms || !terms.length) return null
-  return terms.filter((t) => t.length > 1).map((t) => `"${t}"*`).join(' OR ')
+/** Question words that carry no retrieval signal — they only dilute bm25. */
+const FTS_STOP = new Set([
+  'the', 'and', 'was', 'were', 'what', 'when', 'who', 'whom', 'which', 'how',
+  'why', 'where', 'did', 'does', 'have', 'has', 'had', 'that', 'this', 'with',
+  'from', 'for', 'are', 'about', 'tell', 'give', 'show', 'happened', 'between'
+])
+
+/** Turn free text into a safe FTS5 MATCH expression of prefix terms.
+ *  'and' = all terms must match (implicit FTS5 AND); 'or' = any term. */
+export function toFtsMatch(query: string, mode: 'and' | 'or' = 'or'): string | null {
+  const terms = (query.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter((t) => t.length > 1 && !FTS_STOP.has(t))
+  if (!terms.length) return null
+  const quoted = [...new Set(terms)].map((t) => `"${t}"*`)
+  return quoted.join(mode === 'and' ? ' ' : ' OR ')
 }
 
 // ── Entities ────────────────────────────────────────────────────────────
@@ -237,6 +259,11 @@ export class EntitiesRepo {
   aliases(id: UUID): string[] {
     return (this.L.db.prepare(`SELECT alias_normalized a FROM entity_aliases WHERE entity_id=?`).all(id) as any[]).map((r) => r.a)
   }
+  /** ENTITY_ALIAS_OF — e.g. "Alice Smith" ↔ alice@acme.com from email headers. */
+  addAlias(entityID: UUID, alias: string, source: string): void {
+    this.L.db.prepare(`INSERT OR IGNORE INTO entity_aliases (entity_id,alias_normalized,source) VALUES (?,?,?)`)
+      .run(entityID, alias.toLowerCase().trim(), source)
+  }
   count(): number {
     return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM entities`).get() as any).c)
   }
@@ -258,15 +285,17 @@ export class EventsRepo {
   insert(e: {
     kind: EventKind; date: number; endDate?: number | null; title: string; summary?: string | null;
     entityIDs?: UUID[]; sourceObjectID: UUID; confidence?: number; dateConfidence?: number;
-    qualityTier?: QualityTier; datePrecision?: DatePrecision
+    qualityTier?: QualityTier; datePrecision?: DatePrecision;
+    epistemicStatus?: EpistemicStatus; statusReason?: string | null
   }): KEvent {
     const id = newID()
     this.L.db.prepare(
-      `INSERT INTO events (id,kind,date,end_date,title,summary,source_object_id,confidence,attributes_json,date_confidence,quality_tier,date_precision,narrative_slots_json,slot_values_json)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO events (id,kind,date,end_date,title,summary,source_object_id,confidence,attributes_json,date_confidence,quality_tier,date_precision,narrative_slots_json,slot_values_json,epistemic_status,corroboration_count,status_reason,review_status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
     ).run(id, e.kind, e.date, e.endDate ?? null, e.title, e.summary ?? null, e.sourceObjectID,
       e.confidence ?? 0.5, '{}', e.dateConfidence ?? 0.5, e.qualityTier ?? 'T2',
-      e.datePrecision ?? DatePrecision.day, '{}', '{}')
+      e.datePrecision ?? DatePrecision.day, '{}', '{}',
+      e.epistemicStatus ?? 'asserted', 1, e.statusReason ?? null, 'unreviewed')
     for (const eid of e.entityIDs ?? []) {
       this.L.db.prepare(`INSERT OR IGNORE INTO event_entities (event_id,entity_id) VALUES (?,?)`).run(id, eid)
     }
@@ -299,6 +328,31 @@ export class EventsRepo {
     const r = this.L.db.prepare(`SELECT MIN(date) mn, MAX(date) mx FROM events`).get() as any
     return { earliest: r?.mn != null ? Number(r.mn) : null, latest: r?.mx != null ? Number(r.mx) : null }
   }
+  all(limit = 5000): KEvent[] {
+    return (this.L.db.prepare(`SELECT * FROM events ORDER BY date ASC LIMIT ?`).all(limit) as any[]).map(mapEvent)
+  }
+  byStatus(status?: EpistemicStatus, limit = 300): KEvent[] {
+    const rows = status
+      ? this.L.db.prepare(`SELECT * FROM events WHERE epistemic_status=? ORDER BY date DESC LIMIT ?`).all(status, limit)
+      : this.L.db.prepare(`SELECT * FROM events ORDER BY date DESC LIMIT ?`).all(limit)
+    return (rows as any[]).map(mapEvent)
+  }
+  setFactStatus(id: UUID, status: EpistemicStatus, corroboration: number, reason: string): void {
+    this.L.db.prepare(`UPDATE events SET epistemic_status=?, corroboration_count=?, status_reason=? WHERE id=?`)
+      .run(status, corroboration, reason, id)
+  }
+  setReview(id: UUID, review: 'accepted' | 'rejected'): void {
+    this.L.db.prepare(`UPDATE events SET review_status=? WHERE id=?`).run(review, id)
+  }
+  statusCounts(): Record<string, number> {
+    const rows = this.L.db.prepare(`SELECT epistemic_status s, COUNT(*) c FROM events GROUP BY epistemic_status`).all() as any[]
+    const out: Record<string, number> = {}
+    for (const r of rows) out[r.s] = Number(r.c)
+    return out
+  }
+  corroboratedCount(): number {
+    return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM events WHERE corroboration_count >= 2`).get() as any).c)
+  }
 }
 
 function mapEvent(r: any): KEvent {
@@ -308,7 +362,11 @@ function mapEvent(r: any): KEvent {
     summary: r.summary ?? null, entityIDs: [], sourceObjectID: r.source_object_id,
     confidence: Number(r.confidence), dateConfidence: Number(r.date_confidence ?? 0.5),
     attributes: pj(r.attributes_json, {}), qualityTier: (r.quality_tier ?? 'T2') as QualityTier,
-    datePrecision: Number(r.date_precision ?? DatePrecision.day)
+    datePrecision: Number(r.date_precision ?? DatePrecision.day),
+    epistemicStatus: (r.epistemic_status ?? 'asserted') as EpistemicStatus,
+    corroborationCount: Number(r.corroboration_count ?? 1),
+    statusReason: r.status_reason ?? null,
+    reviewStatus: (r.review_status ?? 'unreviewed') as KEvent['reviewStatus']
   }
 }
 
@@ -561,5 +619,222 @@ export class EventLinksRepo {
       allen: r.allen ?? null, source: r.source, reason: r.reason ?? null, createdAt: Number(r.created_at),
       supersededBy: r.superseded_by ?? null
     }))
+  }
+}
+
+// ── Evidence blocks (v28) ───────────────────────────────────────────────
+
+export class BlocksRepo {
+  constructor(private L: Ledger) {}
+  insertMany(blocks: EvidenceBlock[]): void {
+    const stmt = this.L.db.prepare(
+      `INSERT INTO evidence_blocks (id,object_id,ordinal,block_type,text,structured_json,page,sheet,row_num,char_start,char_end,section_path_json,citation,extraction_method,extraction_confidence,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    )
+    const tx = this.L.db.transaction((rows: EvidenceBlock[]) => {
+      for (const b of rows) {
+        stmt.run(b.id, b.objectID, b.ordinal, b.blockType, b.text ?? null, j(b.structuredData ?? {}),
+          b.page ?? null, b.sheet ?? null, b.rowNum ?? null, b.charStart ?? null, b.charEnd ?? null,
+          j(b.sectionPath ?? []), b.citation, b.extractionMethod, b.extractionConfidence, b.createdAt)
+      }
+    })
+    tx(blocks)
+  }
+  byObject(objectID: UUID): EvidenceBlock[] {
+    return (this.L.db.prepare(`SELECT * FROM evidence_blocks WHERE object_id=? ORDER BY ordinal`).all(objectID) as any[]).map(mapBlock)
+  }
+  byIDs(ids: UUID[]): EvidenceBlock[] {
+    if (!ids.length) return []
+    const q = ids.map(() => '?').join(',')
+    return (this.L.db.prepare(`SELECT * FROM evidence_blocks WHERE id IN (${q})`).all(...ids) as any[]).map(mapBlock)
+  }
+  count(): number {
+    return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM evidence_blocks`).get() as any).c)
+  }
+}
+
+function mapBlock(r: any): EvidenceBlock {
+  return {
+    id: r.id, objectID: r.object_id, ordinal: Number(r.ordinal),
+    blockType: r.block_type as BlockType, text: r.text ?? null,
+    structuredData: pj(r.structured_json, {}), page: r.page != null ? Number(r.page) : null,
+    sheet: r.sheet ?? null, rowNum: r.row_num != null ? Number(r.row_num) : null,
+    charStart: r.char_start != null ? Number(r.char_start) : null,
+    charEnd: r.char_end != null ? Number(r.char_end) : null,
+    sectionPath: pj(r.section_path_json, []), citation: r.citation,
+    extractionMethod: r.extraction_method as ExtractionMethod,
+    extractionConfidence: Number(r.extraction_confidence), createdAt: Number(r.created_at)
+  }
+}
+
+// ── Claims ledger (v29) ─────────────────────────────────────────────────
+
+export class ClaimsRepo {
+  constructor(private L: Ledger) {}
+  insertMany(claims: Omit<LedgerClaim, 'id' | 'createdAt'>[]): number {
+    const stmt = this.L.db.prepare(
+      `INSERT INTO claims (id,claim_text,claim_type,asserted_by,source_object_id,evidence_block_ids_json,confidence,extraction_method,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    )
+    const tx = this.L.db.transaction((rows: Omit<LedgerClaim, 'id' | 'createdAt'>[]) => {
+      for (const c of rows) {
+        stmt.run(newID(), c.claimText, c.claimType, c.assertedBy ?? null, c.sourceObjectID,
+          j(c.evidenceBlockIDs ?? []), c.confidence, c.extractionMethod, nowMs())
+      }
+    })
+    tx(claims)
+    return claims.length
+  }
+  list(objectID?: UUID, limit = 300): LedgerClaim[] {
+    const rows = objectID
+      ? this.L.db.prepare(`SELECT * FROM claims WHERE source_object_id=? ORDER BY created_at DESC LIMIT ?`).all(objectID, limit)
+      : this.L.db.prepare(`SELECT * FROM claims ORDER BY created_at DESC LIMIT ?`).all(limit)
+    return (rows as any[]).map(mapLedgerClaim)
+  }
+  byType(type: ClaimType, limit = 500): LedgerClaim[] {
+    return (this.L.db.prepare(`SELECT * FROM claims WHERE claim_type=? LIMIT ?`).all(type, limit) as any[]).map(mapLedgerClaim)
+  }
+  ftsSearch(query: string, limit = 20): LedgerClaim[] {
+    const match = toFtsMatch(query, 'or')
+    if (!match) return []
+    try {
+      const rows = this.L.db.prepare(
+        `SELECT c.* FROM claims_fts JOIN claims c ON c.rowid = claims_fts.rowid
+         WHERE claims_fts MATCH ? ORDER BY bm25(claims_fts) LIMIT ?`
+      ).all(match, limit) as any[]
+      return rows.map(mapLedgerClaim)
+    } catch { return [] }
+  }
+  count(): number {
+    return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM claims`).get() as any).c)
+  }
+}
+
+function mapLedgerClaim(r: any): LedgerClaim {
+  return {
+    id: r.id, claimText: r.claim_text, claimType: r.claim_type as ClaimType,
+    assertedBy: r.asserted_by ?? null, sourceObjectID: r.source_object_id,
+    evidenceBlockIDs: pj(r.evidence_block_ids_json, []), confidence: Number(r.confidence),
+    extractionMethod: r.extraction_method, createdAt: Number(r.created_at)
+  }
+}
+
+// ── Contradiction ledger (v30) ──────────────────────────────────────────
+
+export class ContradictionsRepo {
+  constructor(private L: Ledger) {}
+  upsert(c: Omit<LedgerContradiction, 'id' | 'detectedAt'>): void {
+    this.L.db.prepare(
+      `INSERT INTO contradictions (id,kind,a_kind,a_id,b_kind,b_id,explanation,resolution_status,detected_at)
+       VALUES (?,?,?,?,?,?,?,?,?)
+       ON CONFLICT(a_id,b_id,kind) DO UPDATE SET explanation=excluded.explanation`
+    ).run(newID(), c.kind, c.aKind, c.aID, c.bKind, c.bID, c.explanation, c.resolutionStatus ?? 'unresolved', nowMs())
+  }
+  list(limit = 200): LedgerContradiction[] {
+    return (this.L.db.prepare(`SELECT * FROM contradictions ORDER BY detected_at DESC LIMIT ?`).all(limit) as any[]).map(mapContra)
+  }
+  byID(id: UUID): LedgerContradiction | null {
+    const r = this.L.db.prepare(`SELECT * FROM contradictions WHERE id=?`).get(id) as any
+    return r ? mapContra(r) : null
+  }
+  forItem(id: UUID): LedgerContradiction[] {
+    return (this.L.db.prepare(`SELECT * FROM contradictions WHERE a_id=? OR b_id=?`).all(id, id) as any[]).map(mapContra)
+  }
+  count(): number {
+    return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM contradictions WHERE resolution_status='unresolved'`).get() as any).c)
+  }
+}
+
+function mapContra(r: any): LedgerContradiction {
+  return {
+    id: r.id, kind: r.kind, aKind: r.a_kind, aID: r.a_id, bKind: r.b_kind, bID: r.b_id,
+    explanation: r.explanation, resolutionStatus: r.resolution_status, detectedAt: Number(r.detected_at)
+  }
+}
+
+// ── Ingestion runs (v28) ────────────────────────────────────────────────
+
+export class IngestionRunsRepo {
+  constructor(private L: Ledger) {}
+  start(fileID: UUID, parser: string): UUID {
+    const id = newID()
+    this.L.db.prepare(`INSERT INTO ingestion_runs (id,file_id,parser,status,started_at) VALUES (?,?,?,?,?)`)
+      .run(id, fileID, parser, 'parsing', nowMs())
+    return id
+  }
+  finish(id: UUID, patch: { status: IngestionRun['status']; blocks?: number; chunks?: number; tableRows?: number; claims?: number; embeddings?: number; warnings?: string[] }): void {
+    this.L.db.prepare(
+      `UPDATE ingestion_runs SET status=?, blocks=?, chunks=?, table_rows=?, claims=?, embeddings=?, warnings_json=?, finished_at=? WHERE id=?`
+    ).run(patch.status, patch.blocks ?? 0, patch.chunks ?? 0, patch.tableRows ?? 0,
+      patch.claims ?? 0, patch.embeddings ?? 0, j(patch.warnings ?? []), nowMs(), id)
+  }
+  list(limit = 100): IngestionRun[] {
+    return (this.L.db.prepare(`SELECT * FROM ingestion_runs ORDER BY started_at DESC LIMIT ?`).all(limit) as any[]).map((r) => ({
+      id: r.id, fileID: r.file_id, parser: r.parser, status: r.status,
+      blocks: Number(r.blocks), chunks: Number(r.chunks), tableRows: Number(r.table_rows),
+      claims: Number(r.claims), embeddings: Number(r.embeddings), warnings: pj(r.warnings_json, []),
+      startedAt: Number(r.started_at), finishedAt: r.finished_at != null ? Number(r.finished_at) : null
+    }))
+  }
+}
+
+// ── Structured table rows (v31) ─────────────────────────────────────────
+
+export class TableRowsRepo {
+  constructor(private L: Ledger) {}
+  insertMany(rows: Omit<TableRow, 'id' | 'createdAt'>[]): number {
+    const stmt = this.L.db.prepare(
+      `INSERT INTO table_rows (id,object_id,sheet,row_num,columns_json,created_at) VALUES (?,?,?,?,?,?)`
+    )
+    const tx = this.L.db.transaction((rs: Omit<TableRow, 'id' | 'createdAt'>[]) => {
+      for (const r of rs) stmt.run(newID(), r.objectID, r.sheet ?? null, r.rowNum, j(r.columns), nowMs())
+    })
+    tx(rows)
+    return rows.length
+  }
+  byObject(objectID: UUID, limit = 1000): TableRow[] {
+    return (this.L.db.prepare(`SELECT * FROM table_rows WHERE object_id=? ORDER BY row_num LIMIT ?`).all(objectID, limit) as any[])
+      .map((r) => ({ id: r.id, objectID: r.object_id, sheet: r.sheet ?? null, rowNum: Number(r.row_num), columns: pj(r.columns_json, {}), createdAt: Number(r.created_at) }))
+  }
+  count(): number {
+    return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM table_rows`).get() as any).c)
+  }
+}
+
+// ── Review ledger (v32, append-only) ────────────────────────────────────
+
+export class ReviewsRepo {
+  constructor(private L: Ledger) {}
+  add(r: { targetKind: string; targetID: UUID; action: string; priorValue?: string | null; newValue?: string | null; reason?: string | null; reviewer?: string }): void {
+    this.L.db.prepare(
+      `INSERT INTO reviews (id,target_kind,target_id,action,prior_value,new_value,reason,reviewer,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`
+    ).run(newID(), r.targetKind, r.targetID, r.action, r.priorValue ?? null, r.newValue ?? null,
+      r.reason ?? null, r.reviewer ?? 'user', nowMs())
+  }
+  forTarget(targetID: UUID): { action: string; priorValue: string | null; newValue: string | null; createdAt: number }[] {
+    return (this.L.db.prepare(`SELECT * FROM reviews WHERE target_id=? ORDER BY created_at`).all(targetID) as any[])
+      .map((r) => ({ action: r.action, priorValue: r.prior_value ?? null, newValue: r.new_value ?? null, createdAt: Number(r.created_at) }))
+  }
+  count(): number {
+    return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM reviews`).get() as any).c)
+  }
+}
+
+// ── Answer audit ledger (v32, append-only) ──────────────────────────────
+
+export class AnswerAuditsRepo {
+  constructor(private L: Ledger) {}
+  add(a: { question: string; intentKind?: string | null; classification?: string | null; answerBody: string;
+           citations: unknown[]; contradictions: number; gaps: string[]; confidence: number;
+           source?: string | null; llmPurposes: string[] }): void {
+    this.L.db.prepare(
+      `INSERT INTO answer_audits (id,question,intent_kind,classification,answer_body,citations_json,contradictions,gaps_json,confidence,source,llm_purposes_json,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    ).run(newID(), a.question, a.intentKind ?? null, a.classification ?? null, a.answerBody,
+      j(a.citations), a.contradictions, j(a.gaps), a.confidence, a.source ?? null, j(a.llmPurposes), nowMs())
+  }
+  count(): number {
+    return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM answer_audits`).get() as any).c)
   }
 }

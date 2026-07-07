@@ -12,6 +12,7 @@ import type { RuleIntentDetector } from '../routing/intentDetector'
 import type { DeterministicRouter } from '../routing/router'
 import { EvidenceVerifier } from './evidenceVerifier'
 import { ResearchExpert, makeDomainExperts, type Expert } from './experts'
+import { composeHistory } from './timelineComposer'
 import type { VerifiedAnswer, ReasoningTrace, AnswerSource } from '../../shared/ai'
 import type { AskUpdateBody } from '../../shared/ipc'
 import { log } from '../core/logger'
@@ -45,7 +46,7 @@ export class MasterBrain {
 
   private async run(question: string, emit: (u: AskUpdateBody) => void): Promise<VerifiedAnswer> {
     const q = question.trim()
-    if (!q) return { body: 'Ask a question.', citations: [], confidence: 0, contradictions: [], refused: true, refusalReason: 'empty', report: null, walkSteps: [], source: 'unknown', answerText: null, intentKind: null, reasoningTrace: null }
+    if (!q) return { body: 'Ask a question.', citations: [], confidence: 0, contradictions: [], refused: true, refusalReason: 'empty', report: null, walkSteps: [], source: 'unknown', answerText: null, intentKind: null, reasoningTrace: null, gaps: [], followUps: [] }
 
     emit({ kind: 'stage', label: 'Detecting intent…' })
     const intent = this.deps.intentDetector.detect(q)
@@ -59,8 +60,25 @@ export class MasterBrain {
     emit({ kind: 'stage', label: 'Retrieving evidence…' })
     const retrieval = await this.deps.retriever.retrieve(intent, decision.retrievalLayers)
 
+    // Reconstructive intents: the LEDGER composes the history (rule-based,
+    // chronological, dedup'd); the LLM only polishes language, fact-locked.
+    // This replaces free-form generation as the source of historical facts.
+    const reconstructive = ['reconstructTimeline', 'reconstructProject', 'reconstructRelationship'].includes(intent.kind)
+    let composed: Awaited<ReturnType<typeof composeHistory>> = null
+    if (reconstructive) {
+      emit({ kind: 'stage', label: 'Reconstructing history from the ledger…' })
+      composed = await composeHistory(retrieval, this.deps.capabilities).catch((err) => {
+        log.brain.warn(`history composer failed: ${String(err)}`)
+        return null
+      })
+    }
+
     emit({ kind: 'stage', label: `Consulting ${decision.expertIDs.length} expert(s)…` })
-    const expertIDs = ['research', ...decision.expertIDs.filter((id) => id !== 'research')]
+    // When the composer produced the narrative, skip the free-form research
+    // expert entirely — its LLM prose is the hallucination surface here.
+    const expertIDs = composed
+      ? decision.expertIDs.filter((id) => id !== 'research')
+      : ['research', ...decision.expertIDs.filter((id) => id !== 'research')]
     const runnable = expertIDs.map((id) => this.experts.get(id)).filter((e): e is Expert => !!e)
     const findings = await Promise.all(
       runnable.map((e) => e.analyze(intent, retrieval).catch((err) => {
@@ -68,22 +86,52 @@ export class MasterBrain {
         return { expertID: e.id, claims: [], confidence: 0, notes: null, droppedUnverifiable: 0 }
       }))
     )
+    if (composed) {
+      findings.unshift({
+        expertID: 'research',
+        claims: [{
+          statement: composed.prose,
+          supportingObjectIDs: composed.objectIDs,
+          supportingEventIDs: composed.eventIDs,
+          supportingEntityIDs: retrieval.entities.slice(0, 8).map((e) => e.id),
+          confidence: 0.75,
+          evidenceGranularity: 'specific'
+        }],
+        confidence: 0.75,
+        notes: composed.prose,
+        droppedUnverifiable: 0
+      })
+    }
 
     emit({ kind: 'stage', label: 'Verifying against evidence…' })
     const trace: ReasoningTrace = {
       layersFired: retrieval.layersUsed,
       expertsRun: runnable.map((e) => e.id),
-      llmPurposes: ['expert.reasoning'],
+      llmPurposes: composed ? ['history.polish'] : ['expert.reasoning'],
       steps: [
         { label: 'Intent', detail: `${intent.kind} (complexity ${decision.complexity})` },
         { label: 'Retrieval', detail: `${retrieval.chunks.length} chunks, ${retrieval.events.length} events, ${retrieval.entities.length} entities` },
-        { label: 'Experts', detail: runnable.map((e) => e.id).join(', ') }
+        ...(composed ? [{ label: 'Composer', detail: `history reconstructed from ${composed.eventIDs.length} ledger events (rule-based; LLM polish fact-locked)` }] : []),
+        { label: 'Experts', detail: runnable.map((e) => e.id).join(', ') || 'none' }
       ],
       assumptions: instant ? ['A distilled memory existed for the subject.'] : [],
       uncertainties: retrieval.chunks.length === 0 ? ['No text chunks matched; answer rests on structured events only.'] : []
     }
     const source: AnswerSource = intent.kind.startsWith('reconstruct') ? 'historical' : 'experts'
     const answer = this.verifier.verify(intent, findings, retrieval, { source, reasoningTrace: trace })
+
+    // Answer ledger (spec 12.10): question, evidence, classification,
+    // confidence, model purposes — append-only, for reproducibility.
+    try {
+      this.deps.repos.answerAudits.add({
+        question: q, intentKind: intent.kind, classification: answer.classification ?? null,
+        answerBody: answer.body, citations: answer.citations, contradictions: answer.contradictions.length,
+        gaps: answer.gaps, confidence: answer.confidence, source: answer.source,
+        llmPurposes: trace.llmPurposes
+      })
+    } catch (err) {
+      log.brain.warn(`answer audit failed: ${String(err)}`)
+    }
 
     // Persist the turn.
     try {
