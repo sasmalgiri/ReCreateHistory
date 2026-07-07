@@ -23,6 +23,8 @@ async function call<T>(path: string, ...args: unknown[]): Promise<T> {
   return (await res.json()).result as T
 }
 
+const askListeners = new Set<(u: AskUpdate) => void>()
+
 // One shared SSE stream, fanned out to topic listeners.
 type Listener = (payload: unknown) => void
 const topicListeners = new Map<string, Set<Listener>>()
@@ -107,8 +109,22 @@ export const km: KalsmritikoshApi = {
   },
   ask: {
     ask: (q) => call('ask.ask', q),
-    start: (q) => call('ask.start', q),
-    onUpdate: (cb) => subscribe('ask', (p) => cb(p as AskUpdate)),
+    // Serverless-safe streaming shim: run the ask as one request and emit a
+    // single terminal update to local listeners (works on Vercel; SSE-based
+    // stage ticks only existed as cosmetics).
+    start: async (q) => {
+      const id = Math.random().toString(36).slice(2)
+      ;(async () => {
+        try {
+          const answer = await call<import('../../../shared/ai').VerifiedAnswer>('ask.ask', q)
+          askListeners.forEach((cb) => cb({ id, kind: 'verified', answer }))
+        } catch (err) {
+          askListeners.forEach((cb) => cb({ id, kind: 'error', message: String((err as Error).message ?? err) }))
+        }
+      })()
+      return { id }
+    },
+    onUpdate: (cb) => { askListeners.add(cb); return () => askListeners.delete(cb) },
     conversations: () => call('ask.conversations'),
     detectIntent: (q) => call('ask.detectIntent', q),
     retrieveOnly: (q) => call('ask.retrieveOnly', q)

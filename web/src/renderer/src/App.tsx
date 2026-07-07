@@ -9,11 +9,14 @@ import { clsx } from 'clsx'
 import {
   MessagesSquare, Search, CalendarClock, BookOpen, NotebookPen, Bookmark,
   Activity, Library, Contact, Network, ScrollText, Boxes, FolderOpen,
-  ListChecks, FileOutput, Settings as SettingsIcon, Loader2, CheckCircle2, LogOut
+  ListChecks, FileOutput, Settings as SettingsIcon, Loader2, CheckCircle2, LogOut,
+  Home as HomeIcon, Compass
 } from 'lucide-react'
 import { km } from './lib/km'
 import { useAuth } from './lib/auth'
 
+import HomeScreen from './screens/HomeScreen'
+import GuideScreen from './screens/GuideScreen'
 import AskScreen from './screens/AskScreen'
 import SearchScreen from './screens/SearchScreen'
 import TimelineScreen from './screens/TimelineScreen'
@@ -33,7 +36,8 @@ import SettingsScreen from './screens/SettingsScreen'
 import OnboardingScreen from './screens/OnboardingScreen'
 
 const NAV = [
-  { to: '/', label: 'Ask', icon: MessagesSquare, el: <AskScreen /> },
+  { to: '/', label: 'Home', icon: HomeIcon, el: <HomeScreen /> },
+  { to: '/ask', label: 'Ask', icon: MessagesSquare, el: <AskScreen /> },
   { to: '/search', label: 'Search', icon: Search, el: <SearchScreen /> },
   { to: '/timeline', label: 'Timeline', icon: CalendarClock, el: <TimelineScreen /> },
   { to: '/history', label: 'History', icon: BookOpen, el: <HistoryScreen /> },
@@ -48,6 +52,7 @@ const NAV = [
   { to: '/sources', label: 'Sources', icon: FolderOpen, el: <SourcesScreen /> },
   { to: '/completeness', label: 'Completeness', icon: ListChecks, el: <CompletenessScreen /> },
   { to: '/convert', label: 'Convert', icon: FileOutput, el: <ConvertScreen /> },
+  { to: '/guide', label: 'Guide', icon: Compass, el: <GuideScreen /> },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, el: <SettingsScreen /> }
 ]
 
@@ -70,7 +75,7 @@ export default function App(): JSX.Element {
         <div className="min-h-0 flex-1">
           <Routes>
             {NAV.map((n) => <Route key={n.to} path={n.to} element={n.el} />)}
-            <Route path="*" element={<AskScreen />} />
+            <Route path="*" element={<HomeScreen />} />
           </Routes>
         </div>
       </main>

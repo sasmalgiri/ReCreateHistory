@@ -10,15 +10,15 @@ import type { Repos } from '../storage'
 import type { KEvent } from '../../shared/models'
 import { factMatrix, missingProof } from './factStatus'
 
-export function buildChronologyReport(repos: Repos): string {
+export async function buildChronologyReport(repos: Repos): Promise<string> {
   const now = new Date().toISOString()
-  const m = factMatrix(repos)
-  const files = repos.files.list(500)
-  const events = repos.events.all(2000).filter((e) => (e.title || '').toLowerCase() !== 'document ingested')
-  const contradictions = repos.contradictions.list(100)
-  const missing = missingProof(repos)
-  const claims = repos.claims.list(undefined, 500)
-  const objects = new Map(repos.objects.list(1000).map((o) => [o.id, o]))
+  const m = await factMatrix(repos)
+  const files = await repos.files.list(500)
+  const events = (await repos.events.all(2000)).filter((e) => (e.title || '').toLowerCase() !== 'document ingested')
+  const contradictions = await repos.contradictions.list(100)
+  const missing = await missingProof(repos)
+  const claims = await repos.claims.list(undefined, 500)
+  const objects = new Map((await repos.objects.list(1000)).map((o) => [o.id, o]))
 
   const L: string[] = []
   L.push('# Reconstructed Chronology Report')

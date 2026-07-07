@@ -84,7 +84,7 @@ export class IngestCoordinator {
     // corroboration and contradictions are cross-document by nature.
     if (ingested > 0) {
       try {
-        recomputeFactStatus(this.repos)
+        await recomputeFactStatus(this.repos)
       } catch (err) {
         log.knowledge.warn(`fact status pass failed: ${String(err)}`)
       }
@@ -133,22 +133,22 @@ export class IngestCoordinator {
   async ingestFile(path: string, depth = 0): Promise<boolean> {
     const sourceType = detectSourceType(path)
     const s = await stat(path)
-    const existing = this.repos.files.byURL(path)
+    const existing = await this.repos.files.byURL(path)
     if (existing?.ingestedAt) return false // already ingested this path
 
     // Identity + exact-duplicate detection (spec steps 3–4): SHA-256 of the
     // original bytes. A duplicate becomes an alias row — parsed exactly once.
     const bytes = await readFile(path)
     const hash = createHash('sha256').update(bytes).digest('hex')
-    const dup = this.repos.files.byHash(hash)
+    const dup = await this.repos.files.byHash(hash)
     if (dup && dup.url !== path) {
-      const alias = this.repos.files.upsert({
+      const alias = await this.repos.files.upsert({
         url: path, sourceType, sizeBytes: s.size, modifiedAt: s.mtimeMs,
         ingestedAt: null, contentHash: hash, availability: 'available', aliasOf: dup.id
       })
-      this.repos.files.markIngested(alias.id)
-      const dupRun = this.repos.ingestionRuns.start(alias.id, `parser.${sourceType}`)
-      this.repos.ingestionRuns.finish(dupRun, {
+      await this.repos.files.markIngested(alias.id)
+      const dupRun = await this.repos.ingestionRuns.start(alias.id, `parser.${sourceType}`)
+      await this.repos.ingestionRuns.finish(dupRun, {
         status: 'duplicate', warnings: [`exact duplicate of ${basename(dup.url)} (same SHA-256)`]
       })
       log.ingestion(`dedup: ${basename(path)} is a duplicate of ${basename(dup.url)}`)
@@ -160,11 +160,11 @@ export class IngestCoordinator {
       return this.ingestZip(path, hash, s.size, s.mtimeMs, depth)
     }
 
-    const file = this.repos.files.upsert({
+    const file = await this.repos.files.upsert({
       url: path, sourceType, sizeBytes: s.size, modifiedAt: s.mtimeMs,
       ingestedAt: null, contentHash: hash, availability: 'available'
     })
-    const runID = this.repos.ingestionRuns.start(file.id, `parser.${sourceType}`)
+    const runID = await this.repos.ingestionRuns.start(file.id, `parser.${sourceType}`)
     const warnings: string[] = []
     let nBlocks = 0, nChunks = 0, nRows = 0, nClaims = 0, nEmbeddings = 0
 
@@ -181,7 +181,7 @@ export class IngestCoordinator {
         }
         if (!doc.content.trim()) continue
         const docClass = classify(doc.content, sourceType)
-        const ko = this.repos.objects.insert({
+        const ko = await this.repos.objects.insert({
           fileID: file.id, sourceType, content: doc.content,
           metadata: { ...doc.metadata, docClass, category: sourceCategory(sourceType) },
           sourceFile: path, confidence: doc.metadata.stub ? 0.4 : 1.0
@@ -200,13 +200,13 @@ export class IngestCoordinator {
           extractionConfidence: b.extractionConfidence ?? 1.0,
           createdAt: Date.now()
         }))
-        if (blocks.length) this.repos.blocks.insertMany(blocks)
+        if (blocks.length) await this.repos.blocks.insertMany(blocks)
         nBlocks += blocks.length
 
         // Structured table rows — spreadsheets stay data, not prose.
         const rowBlocks = blocks.filter((b) => b.blockType === 'table_row')
         if (rowBlocks.length) {
-          nRows += this.repos.tableRows.insertMany(rowBlocks.map((b) => ({
+          nRows += await this.repos.tableRows.insertMany(rowBlocks.map((b) => ({
             objectID: ko.id, sheet: b.sheet ?? null, rowNum: b.rowNum ?? 0,
             columns: Object.fromEntries(Object.entries(b.structuredData).map(([k, v]) => [k, String(v ?? '')]))
           })))
@@ -214,13 +214,13 @@ export class IngestCoordinator {
 
         // Structure-aware chunks (fall back to char-window if no blocks).
         const chunks = blocks.length ? chunkBlocks(ko.id, doc.blocks) : chunkContent(ko.id, doc.content)
-        if (chunks.length) this.repos.chunks.insertMany(chunks)
+        if (chunks.length) await this.repos.chunks.insertMany(chunks)
         nChunks += chunks.length
 
         // Deterministic claims — the layer between evidence and events.
-        nClaims += this.repos.claims.insertMany(extractClaims(ko.id, blocks, doc.metadata))
+        nClaims += await this.repos.claims.insertMany(extractClaims(ko.id, blocks, doc.metadata))
 
-        enrichObject(this.repos, ko.id, doc.content, doc.metadata, s.mtimeMs)
+        await enrichObject(this.repos, ko.id, doc.content, doc.metadata, s.mtimeMs)
 
         // Embeddings (best-effort; FTS still works without them).
         if (chunks.length) {
@@ -228,7 +228,7 @@ export class IngestCoordinator {
             const vecs = await this.capabilities.embedBatch(chunks.map((c) => c.contextPrefix ? `${c.contextPrefix}\n${c.text}` : c.text))
             if (vecs) {
               for (let i = 0; i < chunks.length && i < vecs.length; i++) {
-                if (vecs[i]?.length) { this.repos.vectors.put(chunks[i].id, vecs[i]); nEmbeddings++ }
+                if (vecs[i]?.length) { await this.repos.vectors.put(chunks[i].id, vecs[i]); nEmbeddings++ }
               }
             }
           } catch (err) {
@@ -238,17 +238,17 @@ export class IngestCoordinator {
         }
       }
 
-      this.repos.files.markIngested(file.id)
+      await this.repos.files.markIngested(file.id)
       const status = nBlocks > 0
         ? (warnings.length ? 'low_confidence' : 'indexed')
         : (needsOcr ? 'needs_ocr' : 'unsupported')
-      this.repos.ingestionRuns.finish(runID, {
+      await this.repos.ingestionRuns.finish(runID, {
         status, blocks: nBlocks, chunks: nChunks, tableRows: nRows, claims: nClaims,
         embeddings: nEmbeddings, warnings
       })
       return nBlocks > 0
     } catch (err) {
-      this.repos.ingestionRuns.finish(runID, {
+      await this.repos.ingestionRuns.finish(runID, {
         status: 'failed', blocks: nBlocks, chunks: nChunks, tableRows: nRows,
         claims: nClaims, embeddings: nEmbeddings, warnings: [...warnings, String(err).slice(0, 200)]
       })
@@ -259,11 +259,11 @@ export class IngestCoordinator {
   /** Extract a ZIP and recursively ingest its supported entries. The archive
    *  itself gets a file row + run; children carry their own hashes. */
   private async ingestZip(path: string, hash: string, size: number, mtime: number, depth: number): Promise<boolean> {
-    const file = this.repos.files.upsert({
+    const file = await this.repos.files.upsert({
       url: path, sourceType: 'zip', sizeBytes: size, modifiedAt: mtime,
       ingestedAt: null, contentHash: hash, availability: 'available'
     })
-    const runID = this.repos.ingestionRuns.start(file.id, 'parser.zip')
+    const runID = await this.repos.ingestionRuns.start(file.id, 'parser.zip')
     try {
       const AdmZip: any = (await import('adm-zip')).default
       const zip = new AdmZip(path)
@@ -287,14 +287,14 @@ export class IngestCoordinator {
           log.ingestion.warn(`zip child failed: ${basename(child)}: ${String(err)}`)
         }
       }
-      this.repos.files.markIngested(file.id)
-      this.repos.ingestionRuns.finish(runID, {
+      await this.repos.files.markIngested(file.id)
+      await this.repos.ingestionRuns.finish(runID, {
         status: ok > 0 ? 'indexed' : 'unsupported',
         warnings: [`archive: ${extracted.length} supported entr${extracted.length === 1 ? 'y' : 'ies'}, ${ok} ingested`]
       })
       return ok > 0
     } catch (err) {
-      this.repos.ingestionRuns.finish(runID, { status: 'failed', warnings: [String(err).slice(0, 200)] })
+      await this.repos.ingestionRuns.finish(runID, { status: 'failed', warnings: [String(err).slice(0, 200)] })
       throw err
     }
   }

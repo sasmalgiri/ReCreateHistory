@@ -19,13 +19,13 @@ export interface EnrichResult {
   relationshipCount: number
 }
 
-export function enrichObject(
+export async function enrichObject(
   repos: Repos,
   objectID: UUID,
   content: string,
   metadata: Record<string, unknown>,
   fileModifiedAt: number
-): EnrichResult {
+): Promise<EnrichResult> {
   const isEmail = metadata.isEmail === true
   const emailHeaders = isEmail
     ? { from: String(metadata.from ?? ''), to: String(metadata.to ?? ''), cc: String(metadata.cc ?? '') }
@@ -36,11 +36,11 @@ export function enrichObject(
   const idByNorm = new Map<string, UUID>()
   const entityIDs: UUID[] = []
   for (const e of extracted) {
-    const id = repos.entities.upsertCanonical({
+    const id = await repos.entities.upsertCanonical({
       kind: e.kind, value: e.value, normalized: e.normalized,
       sourceObjectID: objectID, confidence: e.confidence, qualityTier: e.qualityTier
     })
-    repos.entities.addMention(id, e.kind, e.value, e.normalized, objectID, e.confidence)
+    await repos.entities.addMention(id, e.kind, e.value, e.normalized, objectID, e.confidence)
     idByNorm.set(e.normalized, id)
     if (!entityIDs.includes(id)) entityIDs.push(id)
   }
@@ -69,7 +69,7 @@ export function enrichObject(
       .map((e) => idByNorm.get(e.normalized))
       .filter((x): x is UUID => !!x)
     const participants = linked.length ? linked : topEntityIDs
-    const inserted = repos.events.insert({
+    const inserted = await repos.events.insert({
       kind: ev.kind, date: ev.date, title: ev.title, summary: ev.summary ?? null,
       entityIDs: participants, sourceObjectID: objectID, confidence: ev.confidence,
       dateConfidence: ev.dateConfidence, qualityTier: ev.qualityTier, datePrecision: ev.datePrecision
@@ -87,9 +87,9 @@ export function enrichObject(
         const email = m[2].trim().toLowerCase()
         const personID = idByNorm.get(name.toLowerCase())
         if (personID && email.includes('@')) {
-          repos.entities.addAlias(personID, email, 'email-header')
+          await repos.entities.addAlias(personID, email, 'email-header')
           const emailID = idByNorm.get(email)
-          if (emailID) repos.entities.addAlias(emailID, name.toLowerCase(), 'email-header')
+          if (emailID) await repos.entities.addAlias(emailID, name.toLowerCase(), 'email-header')
         }
       }
     }
@@ -104,7 +104,7 @@ export function enrichObject(
     const fromID = fromEmail ? idByNorm.get(fromEmail.toLowerCase()) : undefined
     const toID = toEmail ? idByNorm.get(toEmail.toLowerCase()) : undefined
     if (fromID && toID && fromID !== toID) {
-      repos.relationships.upsert({ kind: 'emailed', fromEntityID: fromID, toEntityID: toID, sourceObjectID: objectID, confidence: 0.8 })
+      await repos.relationships.upsert({ kind: 'emailed', fromEntityID: fromID, toEntityID: toID, sourceObjectID: objectID, confidence: 0.8 })
       relCount++
     }
   }
@@ -113,7 +113,7 @@ export function enrichObject(
   for (let i = 0; i < capped.length; i++) {
     for (let k = i + 1; k < capped.length; k++) {
       const [a, b] = [capped[i], capped[k]].sort()
-      repos.relationships.upsert({ kind: 'co_occurs', fromEntityID: a, toEntityID: b, sourceObjectID: objectID, confidence: 0.4 })
+      await repos.relationships.upsert({ kind: 'co_occurs', fromEntityID: a, toEntityID: b, sourceObjectID: objectID, confidence: 0.4 })
       relCount++
     }
   }

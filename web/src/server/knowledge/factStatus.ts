@@ -53,8 +53,8 @@ function baseStatus(e: KEvent): { status: EpistemicStatus; reason: string } {
  * ingest batch: base status per event → cross-document corroboration →
  * date-conflict contradictions persisted to the contradiction ledger.
  */
-export function recomputeFactStatus(repos: Repos): void {
-  const events = repos.events.all(5000)
+export async function recomputeFactStatus(repos: Repos): Promise<void> {
+  const events = await repos.events.all(5000)
   if (!events.length) return
 
   // Group same-fact events across documents by date-stripped fact key, so a
@@ -94,7 +94,7 @@ export function recomputeFactStatus(repos: Repos): void {
         if (dA === dB) continue
         conflictedIDs.add(a.id); conflictedIDs.add(b.id)
         conflictDays.add(dA); conflictDays.add(dB)
-        repos.contradictions.upsert({
+        await repos.contradictions.upsert({
           kind: 'date_conflict',
           aKind: 'event', aID: a.id,
           bKind: 'event', bID: b.id,
@@ -114,7 +114,7 @@ export function recomputeFactStatus(repos: Repos): void {
         : corroboration >= 2
           ? `${base.reason}; corroborated by ${corroboration} sources`
           : base.reason
-      repos.events.setFactStatus(e.id, status, corroboration, reason)
+      await repos.events.setFactStatus(e.id, status, corroboration, reason)
     }
   }
   log.knowledge(`fact status recomputed: ${events.length} events, ${contradictions} contradiction(s) persisted`)
@@ -133,9 +133,9 @@ function dateAtGrain(ms: number, grain: number): string {
 }
 
 /** Rule-based missing-proof analysis — what the sources do NOT establish. */
-export function missingProof(repos: Repos): MissingProofItem[] {
+export async function missingProof(repos: Repos): Promise<MissingProofItem[]> {
   const out: MissingProofItem[] = []
-  const events = repos.events.all(3000)
+  const events = await repos.events.all(3000)
 
   // 1. Single-source, low-confidence events.
   for (const e of events) {
@@ -195,8 +195,8 @@ export function missingProof(repos: Repos): MissingProofItem[] {
 }
 
 /** Aggregate counts for the Fact Status Matrix header. */
-export function factMatrix(repos: Repos): FactMatrix {
-  const counts = repos.events.statusCounts()
+export async function factMatrix(repos: Repos): Promise<FactMatrix> {
+  const counts = await repos.events.statusCounts()
   return {
     observed: counts['observed'] ?? 0,
     asserted: counts['asserted'] ?? 0,
@@ -204,9 +204,9 @@ export function factMatrix(repos: Repos): FactMatrix {
     inferred: counts['inferred'] ?? 0,
     contradicted: counts['contradicted'] ?? 0,
     unsupported: counts['unsupported'] ?? 0,
-    totalEvents: repos.events.count(),
-    corroborated: repos.events.corroboratedCount(),
-    contradictions: repos.contradictions.count(),
-    missingProof: missingProof(repos).length
+    totalEvents: await repos.events.count(),
+    corroborated: await repos.events.corroboratedCount(),
+    contradictions: await repos.contradictions.count(),
+    missingProof: (await missingProof(repos)).length
   }
 }

@@ -24,7 +24,7 @@ const cloud = pickCloud()
 export const config = {
   isProd: env.NODE_ENV === 'production',
   port: Number(env.PORT || 8787),
-  dataDir: env.DATA_DIR || 'data',
+  dataDir: env.DATA_DIR || (env.VERCEL ? '/tmp/rch-data' : 'data'),
   jwtSecret: env.JWT_SECRET || (env.NODE_ENV === 'production' ? '' : randomBytes(32).toString('hex')),
   cookieName: 'km_session',
   // AI engine — "both": Ollama if reachable, else cloud.

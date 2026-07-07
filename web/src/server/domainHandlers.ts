@@ -33,10 +33,10 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
       phase: 'ready', databasePath: 'per-user ledger', schemaVersion: app.repos.ledger.schemaVersion,
       hasRoots: app.roots().length > 0, onboardingShown: app.onboardingShown
     }),
-    'app.inventory': async () => app.inventory(),
+    'app.inventory': async () => await app.inventory(),
     'app.ingestActivity': async (): Promise<IngestActivity> => ({
       activeCount: app.coordinator.state.activeCount, lastFile: app.coordinator.state.lastFile,
-      totalFiles: app.repos.files.count(), totalObjects: app.repos.objects.count()
+      totalFiles: await app.repos.files.count(), totalObjects: await app.repos.objects.count()
     }),
     'app.markOnboardingShown': async () => { app.markOnboardingShown() },
     'app.openPath': async () => { /* no-op on web — server files aren't the user's local files */ },
@@ -55,7 +55,7 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
     },
     'ingest.listFiles': async (limit?: number) => app.repos.files.list(limit ?? 500),
     'ingest.reingest': async (fileID: UUID) => {
-      const f = app.repos.files.byID(fileID)
+      const f = await app.repos.files.byID(fileID)
       if (f) { app.repos.files.remove(fileID); await app.coordinator.ingestPaths([f.url]) }
     },
     'ingest.remove': async (fileID: UUID) => { app.repos.files.remove(fileID) },
@@ -82,11 +82,11 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
 
     // ── search ──
     'search.query': async (text: string, limit?: number): Promise<SearchHit[]> => {
-      const ranks = app.repos.chunks.ftsSearch(text, limit ?? 30)
+      const ranks = await app.repos.chunks.ftsSearch(text, limit ?? 30)
       const hits: SearchHit[] = []
       for (const r of ranks) {
-        const c = app.repos.chunks.byID(r.chunkID); if (!c) continue
-        const ko = app.repos.objects.byID(c.objectID); if (!ko) continue
+        const c = await app.repos.chunks.byID(r.chunkID); if (!c) continue
+        const ko = await app.repos.objects.byID(c.objectID); if (!ko) continue
         hits.push({ objectID: ko.id, chunkID: c.id, sourceFile: ko.sourceFile, sourceCategory: sourceCategory(ko.sourceType), snippet: c.text.slice(0, 240), score: -r.rank, via: 'fts' })
       }
       return hits
@@ -94,11 +94,11 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
     'search.semantic': async (text: string, limit?: number): Promise<SearchHit[]> => {
       const qvec = await app.capabilities.embed(text)
       if (!qvec) return []
-      const near = app.repos.vectors.nearest(qvec, limit ?? 30)
+      const near = await app.repos.vectors.nearest(qvec, limit ?? 30)
       const hits: SearchHit[] = []
       for (const n of near) {
-        const c = app.repos.chunks.byID(n.chunkID); if (!c) continue
-        const ko = app.repos.objects.byID(c.objectID); if (!ko) continue
+        const c = await app.repos.chunks.byID(n.chunkID); if (!c) continue
+        const ko = await app.repos.objects.byID(c.objectID); if (!ko) continue
         hits.push({ objectID: ko.id, chunkID: c.id, sourceFile: ko.sourceFile, sourceCategory: sourceCategory(ko.sourceType), snippet: c.text.slice(0, 240), score: n.score, via: 'vector' })
       }
       return hits
@@ -107,10 +107,14 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
     // ── timeline ──
     'timeline.events': async (q: TimelineQuery) => app.timeline.events(q),
     'timeline.eventDetail': async (id: UUID) => {
-      const event = app.repos.events.byID(id)
+      const event = await app.repos.events.byID(id)
       if (!event) return { event: null, entities: [], object: null }
-      const entities = app.repos.events.entitiesFor(id).map((eid) => app.repos.entities.byID(eid)).filter(Boolean)
-      return { event, entities, object: app.repos.objects.byID(event.sourceObjectID) }
+      const entities = []
+      for (const eid of await app.repos.events.entitiesFor(id)) {
+        const e = await app.repos.entities.byID(eid)
+        if (e) entities.push(e)
+      }
+      return { event, entities, object: await app.repos.objects.byID(event.sourceObjectID) }
     },
     'timeline.causalLinks': async (id: UUID) => app.repos.eventLinks.forEvent(id),
 
@@ -124,17 +128,21 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
 
     // ── dossier ──
     'dossier.forEntity': async (id: UUID): Promise<EntityDossier | null> => {
-      const entity = app.repos.entities.byID(id)
+      const entity = await app.repos.entities.byID(id)
       if (!entity) return null
-      const events = app.repos.events.forEntity(id, 100)
-      const relationships = app.repos.relationships.forEntity(id, 60)
-      const nb = app.graph.neighborhood(id, 1)
-      const neighbors = nb.nodes.filter((n) => n.id !== id).map((n) => ({ entity: app.repos.entities.byID(n.id)!, weight: n.weight })).filter((x) => x.entity).slice(0, 20)
+      const events = await app.repos.events.forEntity(id, 100)
+      const relationships = await app.repos.relationships.forEntity(id, 60)
+      const nb = await app.graph.neighborhood(id, 1)
+      const neighbors: EntityDossier['neighbors'] = []
+      for (const n of nb.nodes.filter((x) => x.id !== id).slice(0, 20)) {
+        const e = await app.repos.entities.byID(n.id)
+        if (e) neighbors.push({ entity: e, weight: n.weight })
+      }
       const subjectKind = ['organization', 'vendor', 'client'].includes(entity.kind) ? 'organization' : entity.kind === 'person' ? 'person' : entity.kind === 'project' ? 'project' : 'topic'
-      const memory = app.repos.memory.bySubject(subjectKind as any, entity.normalizedValue ?? entity.value.toLowerCase())
+      const memory = await app.repos.memory.bySubject(subjectKind as any, entity.normalizedValue ?? entity.value.toLowerCase())
       const dates = events.map((e) => e.date)
       return {
-        entity, aliases: app.repos.entities.aliases(id), mentionCount: app.repos.entities.mentionCount(id),
+        entity, aliases: await app.repos.entities.aliases(id), mentionCount: await app.repos.entities.mentionCount(id),
         events, relationships, neighbors, memory,
         firstSeen: dates.length ? Math.min(...dates) : null, lastSeen: dates.length ? Math.max(...dates) : null,
         sourceObjectIDs: [...new Set(events.map((e) => e.sourceObjectID))]
@@ -168,7 +176,7 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
 
     // ── live ──
     'live.sample': async (): Promise<LiveSample> => {
-      const inv = app.inventory()
+      const inv = await app.inventory()
       return {
         at: Date.now(), ingestActive: app.coordinator.state.activeCount,
         objects: inv.objects, chunks: inv.chunks, entities: inv.entities, events: inv.events, vectors: inv.vectors,
@@ -185,12 +193,12 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
     'ledger.claims': async (objectID?: UUID, limit?: number) => app.repos.claims.list(objectID, limit ?? 300),
     'ledger.contradictions': async () => app.repos.contradictions.list(),
     'ledger.contradictionDetail': async (id: UUID) => {
-      const contradiction = app.repos.contradictions.byID(id)
+      const contradiction = await app.repos.contradictions.byID(id)
       if (!contradiction) return { contradiction: null, a: null, b: null }
       return {
         contradiction,
-        a: contradiction.aKind === 'event' ? app.repos.events.byID(contradiction.aID) : null,
-        b: contradiction.bKind === 'event' ? app.repos.events.byID(contradiction.bID) : null
+        a: contradiction.aKind === 'event' ? await app.repos.events.byID(contradiction.aID) : null,
+        b: contradiction.bKind === 'event' ? await app.repos.events.byID(contradiction.bID) : null
       }
     },
     'ledger.missingProof': async () => {
@@ -205,7 +213,7 @@ export function createHandlers(app: UserApp, push: PushFn): HandlerMap {
     'ledger.eventsByStatus': async (status?: string, limit?: number) =>
       app.repos.events.byStatus(status as never, limit ?? 300),
     'ledger.reviewEvent': async (id: UUID, status: 'accepted' | 'rejected') => {
-      const prior = app.repos.events.byID(id)
+      const prior = await app.repos.events.byID(id)
       // Append-only review ledger (spec 12.9) + current-state flag on the event.
       app.repos.reviews.add({
         targetKind: 'event', targetID: id, action: status,

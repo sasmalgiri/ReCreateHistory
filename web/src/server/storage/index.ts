@@ -5,6 +5,7 @@
 //
 
 import { Ledger } from './database'
+import type { LedgerOpts } from './database'
 import { VectorStore } from './vectorStore'
 import {
   FilesRepo, ObjectsRepo, ChunksRepo, EntitiesRepo, EventsRepo, RelationshipsRepo,
@@ -38,9 +39,14 @@ export class Repos {
   readonly reviews: ReviewsRepo
   readonly answerAudits: AnswerAuditsRepo
 
-  constructor(dbPath: string) {
-    this.ledger = new Ledger(dbPath)
-    this.ledger.migrate()
+  static async open(opts: LedgerOpts): Promise<Repos> {
+    const ledger = new Ledger(opts)
+    await ledger.migrate()
+    return new Repos(ledger)
+  }
+
+  private constructor(ledger: Ledger) {
+    this.ledger = ledger
     this.files = new FilesRepo(this.ledger)
     this.objects = new ObjectsRepo(this.ledger)
     this.chunks = new ChunksRepo(this.ledger)

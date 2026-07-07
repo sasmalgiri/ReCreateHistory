@@ -21,12 +21,12 @@ export interface VerifyOptions {
 export class EvidenceVerifier {
   constructor(private repos: Repos) {}
 
-  verify(
+  async verify(
     intent: UserIntent,
     findings: ExpertFindings[],
     retrieval: RetrievalResult,
     opts: VerifyOptions = {}
-  ): VerifiedAnswer {
+  ): Promise<VerifiedAnswer> {
     const synth = findings.find((f) => f.expertID === 'research')
     const domainFindings = findings.filter((f) => f.expertID !== 'research')
 
@@ -49,7 +49,7 @@ export class EvidenceVerifier {
     }
 
     // Citations — resolve supporting IDs to snippets, dedup, cap.
-    const citations = this.buildCitations(findings, 12)
+    const citations = await this.buildCitations(findings, 12)
 
     // Confidence — mean claim confidence scaled by evidence breadth.
     const claimConfs = findings.flatMap((f) => f.claims.map((c) => c.confidence)).filter((x) => x > 0)
@@ -57,7 +57,7 @@ export class EvidenceVerifier {
     const breadth = Math.min(1, (retrieval.chunks.length + retrieval.events.length) / 12)
     const confidence = clamp(0.05, 0.98, mean * (0.6 + 0.4 * breadth))
 
-    const contradictions = this.detectContradictions(retrieval)
+    const contradictions = await this.detectContradictions(retrieval)
     const droppedUnverifiable = findings.reduce((a, f) => a + f.droppedUnverifiable, 0)
     // Completeness: evidence breadth lifts it; each declared gap lowers it.
     const coverageScore = clamp(0.1, 1, (0.45 + 0.55 * breadth) - 0.18 * Math.min(gaps.length, 3))
@@ -79,9 +79,11 @@ export class EvidenceVerifier {
 
     // Spec §18 classification — derived from the epistemic statuses of the
     // events actually cited, deterministically.
-    const citedEvents = citations
-      .map((c) => (c.eventID ? this.repos.events.byID(c.eventID) : null))
-      .filter((e): e is NonNullable<typeof e> => !!e)
+    const citedEvents: NonNullable<Awaited<ReturnType<Repos['events']['byID']>>>[] = []
+    for (const c of citations) {
+      const e = c.eventID ? await this.repos.events.byID(c.eventID) : null
+      if (e) citedEvents.push(e)
+    }
     const classification = classify18(citedEvents, contradictions.length, retrieval)
 
     return {
@@ -117,36 +119,36 @@ export class EvidenceVerifier {
     return out.slice(0, 3)
   }
 
-  private buildCitations(findings: ExpertFindings[], cap: number): Citation[] {
+  private async buildCitations(findings: ExpertFindings[], cap: number): Promise<Citation[]> {
     const seen = new Set<string>()
     const out: Citation[] = []
-    const pushObject = (objectID: UUID, eventID?: UUID): void => {
+    const pushObject = async (objectID: UUID, eventID?: UUID): Promise<void> => {
       const key = eventID ?? objectID
       if (seen.has(key) || out.length >= cap) return
       seen.add(key)
       if (eventID) {
-        const ev = this.repos.events.byID(eventID)
+        const ev = await this.repos.events.byID(eventID)
         if (ev) { out.push({ objectID: ev.sourceObjectID, eventID, snippet: `${new Date(ev.date).toISOString().slice(0, 10)} — ${ev.title}` }); return }
       }
-      const ko = this.repos.objects.byID(objectID)
+      const ko = await this.repos.objects.byID(objectID)
       if (ko) out.push({ objectID, snippet: firstLine(ko.content) })
     }
     for (const f of findings) {
       for (const c of f.claims) {
-        for (const eid of c.supportingEventIDs) pushObject('', eid)
-        for (const oid of c.supportingObjectIDs) pushObject(oid)
+        for (const eid of c.supportingEventIDs) await pushObject('', eid)
+        for (const oid of c.supportingObjectIDs) await pushObject(oid)
       }
     }
     return out.filter((c) => c.objectID)
   }
 
-  private detectContradictions(retrieval: RetrievalResult): Contradiction[] {
+  private async detectContradictions(retrieval: RetrievalResult): Promise<Contradiction[]> {
     const contradictions: Contradiction[] = []
     const seen = new Set<string>()
     // 1. The persisted contradiction ledger (v30) — detected at ingest time,
     //    surfaced whenever a retrieved event is involved. Never averaged away.
     const eventIDs = new Set(retrieval.events.map((e) => e.id))
-    for (const c of this.repos.contradictions.list(100)) {
+    for (const c of await this.repos.contradictions.list(100)) {
       if (!eventIDs.has(c.aID) && !eventIDs.has(c.bID)) continue
       if (seen.has(c.explanation)) continue
       seen.add(c.explanation)

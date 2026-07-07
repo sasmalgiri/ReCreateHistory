@@ -21,7 +21,8 @@ import { GraphStore } from './knowledge/graphStore'
 import { TimelineEngine } from './knowledge/timelineEngine'
 import { Summarizer } from './knowledge/summarizer'
 import { MemoryDistiller } from './knowledge/memoryDistiller'
-import { userLedgerPath, userMetaPath } from './paths'
+import { userLedgerOpts } from './storage/driver'
+import { userMetaPath } from './paths'
 import { config } from './config'
 import { log } from './core/logger'
 import type { KnowledgeInventory } from '../shared/ipc'
@@ -44,9 +45,15 @@ export class UserApp {
   lastUsed = Date.now()
   private meta: UserMeta = { roots: [], onboardingShown: false }
 
-  constructor(userId: string) {
+  /** Repos opens asynchronously (libSQL) — construct via `UserApp.create`. */
+  static async create(userId: string): Promise<UserApp> {
+    const repos = await Repos.open(await userLedgerOpts(userId))
+    return new UserApp(userId, repos)
+  }
+
+  private constructor(userId: string, repos: Repos) {
     this.userId = userId
-    this.repos = new Repos(userLedgerPath(userId))
+    this.repos = repos
     this.loadMeta()
 
     this.gate = new PrivacyGate(config.allowCloud)
@@ -89,19 +96,19 @@ export class UserApp {
   get onboardingShown(): boolean { return this.meta.onboardingShown }
   markOnboardingShown(): void { this.meta.onboardingShown = true; this.saveMeta() }
 
-  inventory(): KnowledgeInventory {
-    const cats = this.repos.files.countByCategory()
+  async inventory(): Promise<KnowledgeInventory> {
+    const cats = await this.repos.files.countByCategory()
     const byCategory: Record<string, number> = {}
     for (const [st, n] of Object.entries(cats)) {
       const cat = sourceCategory(st as SourceType)
       byCategory[cat] = (byCategory[cat] ?? 0) + n
     }
-    const bounds = this.repos.events.bounds()
+    const bounds = await this.repos.events.bounds()
     return {
-      files: this.repos.files.count(), objects: this.repos.objects.count(), chunks: this.repos.chunks.count(),
-      entities: this.repos.entities.count(), events: this.repos.events.count(), relationships: this.repos.relationships.count(),
-      memories: this.repos.memory.count(), summaries: this.repos.summaries.count(), assertions: this.repos.assertions.count(),
-      vectors: this.repos.vectors.count(), byCategory, earliestEvent: bounds.earliest, latestEvent: bounds.latest
+      files: await this.repos.files.count(), objects: await this.repos.objects.count(), chunks: await this.repos.chunks.count(),
+      entities: await this.repos.entities.count(), events: await this.repos.events.count(), relationships: await this.repos.relationships.count(),
+      memories: await this.repos.memory.count(), summaries: await this.repos.summaries.count(), assertions: await this.repos.assertions.count(),
+      vectors: await this.repos.vectors.count(), byCategory, earliestEvent: bounds.earliest, latestEvent: bounds.latest
     }
   }
 

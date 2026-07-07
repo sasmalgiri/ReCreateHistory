@@ -9,6 +9,7 @@ import { km, useAsync } from '../lib/km'
 import { PageHeader, Button, Card, EmptyState, Badge, Spinner, Scroll } from '../components/ui'
 import { fmtBytes, fmtRelative } from '../lib/format'
 import { sourceCategory } from '../../../shared/models'
+import { GuideBox } from '../components/guidance'
 
 export default function SourcesScreen(): JSX.Element {
   const files = useAsync(() => km.ingest.listFiles(500), [])
@@ -37,6 +38,7 @@ export default function SourcesScreen(): JSX.Element {
         }
       />
       <Scroll>
+        <GuideBox screen="sources" />
         <div className="space-y-4">
           {roots.data && roots.data.length > 0 && (
             <Card title="Watched roots">

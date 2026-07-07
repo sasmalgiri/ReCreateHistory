@@ -42,7 +42,7 @@ export class HybridRetriever {
     // Resolve entity hints once — several layers key off them.
     const hinted: Entity[] = []
     for (const hint of intent.entityHints) {
-      for (const e of this.repos.entities.search(hint, 3)) {
+      for (const e of await this.repos.entities.search(hint, 3)) {
         if (!entities.has(e.id)) { entities.set(e.id, e); hinted.push(e) }
       }
     }
@@ -50,7 +50,7 @@ export class HybridRetriever {
     // table — capitalized-hint detection misses lowercase mentions ("acme"),
     // and thin evidence is exactly when the LLM leaks trained knowledge.
     for (const w of contentWords(question).slice(0, 10)) {
-      for (const e of this.repos.entities.search(w, 2)) {
+      for (const e of await this.repos.entities.search(w, 2)) {
         if (!entities.has(e.id)) { entities.set(e.id, e); hinted.push(e) }
       }
     }
@@ -60,8 +60,8 @@ export class HybridRetriever {
       layersUsed.push('timeline')
       const tf = intent.timeframe
       const base = hinted.length
-        ? hinted.flatMap((e) => this.repos.events.forEntity(e.id, 40))
-        : this.repos.events.inRange(tf?.start, tf?.end, 60)
+        ? (await Promise.all(hinted.map((e) => this.repos.events.forEntity(e.id, 40)))).flat()
+        : await this.repos.events.inRange(tf?.start, tf?.end, 60)
       for (const ev of base) {
         if (tf && (tf.start && ev.date < tf.start || tf.end && ev.date > tf.end)) continue
         events.set(ev.id, ev)
@@ -72,8 +72,8 @@ export class HybridRetriever {
     if (layers.includes('entity')) {
       layersUsed.push('entity')
       for (const e of hinted) {
-        for (const ev of this.repos.events.forEntity(e.id, 30)) events.set(ev.id, ev)
-        for (const r of this.repos.relationships.forEntity(e.id, 20)) relationships.set(r.id, r)
+        for (const ev of await this.repos.events.forEntity(e.id, 30)) events.set(ev.id, ev)
+        for (const r of await this.repos.relationships.forEntity(e.id, 20)) relationships.set(r.id, r)
       }
     }
 
@@ -83,9 +83,9 @@ export class HybridRetriever {
     let ftsRanks: { chunkID: UUID; rank: number }[] = []
     if (layers.includes('metadata')) {
       layersUsed.push('metadata')
-      ftsRanks = this.repos.chunks.ftsSearch(question, 40, 'and')
+      ftsRanks = await this.repos.chunks.ftsSearch(question, 40, 'and')
       if (ftsRanks.length < 3) {
-        const orRanks = this.repos.chunks.ftsSearch(question, 40, 'or')
+        const orRanks = await this.repos.chunks.ftsSearch(question, 40, 'or')
         const seen = new Set(ftsRanks.map((r) => r.chunkID))
         ftsRanks = [...ftsRanks, ...orRanks.filter((r) => !seen.has(r.chunkID))]
       }
@@ -95,12 +95,12 @@ export class HybridRetriever {
     if (layers.includes('vector')) {
       layersUsed.push('vector')
       const qvec = await this.capabilities.embed(question)
-      if (qvec) vecRanks = this.repos.vectors.nearest(qvec, 40)
+      if (qvec) vecRanks = await this.repos.vectors.nearest(qvec, 40)
     }
 
     const fused = this.rrf(ftsRanks, vecRanks)
     const chunkIDs = fused.map((f) => f.chunkID)
-    const chunkMap = new Map(this.repos.chunks.byIDs(chunkIDs).map((c) => [c.id, c]))
+    const chunkMap = new Map((await this.repos.chunks.byIDs(chunkIDs)).map((c) => [c.id, c]))
     const chunks: RetrievedChunk[] = []
     for (const f of fused) {
       const c = chunkMap.get(f.chunkID)
@@ -113,7 +113,7 @@ export class HybridRetriever {
     {
       const have = new Set(chunks.map((rc) => rc.chunk.id))
       for (const top of chunks.slice(0, 5)) {
-        const siblings = this.repos.chunks.byObject(top.chunk.objectID)
+        const siblings = await this.repos.chunks.byObject(top.chunk.objectID)
         for (const delta of [-1, 1]) {
           const n = siblings.find((c) => c.ordinal === top.chunk.ordinal + delta)
           if (n && !have.has(n.id)) {
@@ -130,7 +130,7 @@ export class HybridRetriever {
       const have = new Set(chunks.map((rc) => rc.chunk.id))
       const objIDs = [...new Set([...events.values()].slice(0, 4).map((e) => e.sourceObjectID))]
       for (const oid of objIDs) {
-        for (const c of this.repos.chunks.byObject(oid).slice(0, 3)) {
+        for (const c of (await this.repos.chunks.byObject(oid)).slice(0, 3)) {
           if (!have.has(c.id)) { have.add(c.id); chunks.push({ chunk: c, score: 0.01, viaLayer: 'entity' }) }
         }
       }
@@ -140,7 +140,7 @@ export class HybridRetriever {
     if (layers.includes('summary')) {
       layersUsed.push('summary')
       const terms = new Set((question.toLowerCase().match(/[a-z]{4,}/g) ?? []))
-      for (const s of this.repos.summaries.list(undefined, 50)) {
+      for (const s of await this.repos.summaries.list(undefined, 50)) {
         const body = s.body.toLowerCase()
         if ([...terms].some((t) => body.includes(t))) summaries.set(s.id, s)
       }
@@ -150,10 +150,10 @@ export class HybridRetriever {
     if (layers.includes('graph')) {
       layersUsed.push('graph')
       for (const e of hinted) {
-        for (const r of this.repos.relationships.forEntity(e.id, 20)) {
+        for (const r of await this.repos.relationships.forEntity(e.id, 20)) {
           relationships.set(r.id, r)
           const other = r.fromEntityID === e.id ? r.toEntityID : r.fromEntityID
-          const oe = this.repos.entities.byID(other)
+          const oe = await this.repos.entities.byID(other)
           if (oe && !entities.has(oe.id)) entities.set(oe.id, oe)
         }
       }
@@ -161,9 +161,9 @@ export class HybridRetriever {
 
     // Backfill entities referenced by retrieved events so citations resolve.
     for (const ev of events.values()) {
-      for (const eid of this.repos.events.entitiesFor(ev.id)) {
+      for (const eid of await this.repos.events.entitiesFor(ev.id)) {
         if (!entities.has(eid)) {
-          const e = this.repos.entities.byID(eid)
+          const e = await this.repos.entities.byID(eid)
           if (e) entities.set(eid, e)
         }
       }

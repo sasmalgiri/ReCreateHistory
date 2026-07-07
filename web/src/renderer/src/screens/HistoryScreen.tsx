@@ -12,6 +12,7 @@ import { BookOpen, CalendarClock, FileText, AlertTriangle, SearchX, CheckCircle2
 import { km, useAsync } from '../lib/km'
 import { PageHeader, Card, Badge, Spinner, EmptyState, Scroll, Meter, ErrorNote, Button } from '../components/ui'
 import { fmtDate, fmtPct } from '../lib/format'
+import { GuideBox, StatusLegend } from '../components/guidance'
 import type { KEvent, EpistemicStatus, LedgerClaim, UUID } from '../../../shared/models'
 import type { FactMatrix } from '../../../shared/ipc'
 
@@ -46,7 +47,9 @@ export default function HistoryScreen(): JSX.Element {
         actions={<Button onClick={exportReport}><Download className="h-4 w-4" /> Export report</Button>}
       />
       <div className="border-b border-ink-800 px-6 pt-3">
+        <GuideBox screen="history" />
         {matrix.data && <MatrixStrip m={matrix.data} />}
+        <div className="mt-2"><StatusLegend /></div>
         <div className="mt-3 flex gap-1">
           {([
             ['timeline', 'Timeline', CalendarClock],

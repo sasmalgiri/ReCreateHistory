@@ -54,7 +54,7 @@ export class MasterBrain {
     log.brain(`ask "${q.slice(0, 50)}" → ${decision.rationale}`)
 
     // Phase 1 — instant memory read (tagged as verifying, never authoritative).
-    const instant = this.phase1Instant(intent)
+    const instant = await this.phase1Instant(intent)
     if (instant) emit({ kind: 'instant', body: instant })
 
     emit({ kind: 'stage', label: 'Retrieving evidence…' })
@@ -118,12 +118,12 @@ export class MasterBrain {
       uncertainties: retrieval.chunks.length === 0 ? ['No text chunks matched; answer rests on structured events only.'] : []
     }
     const source: AnswerSource = intent.kind.startsWith('reconstruct') ? 'historical' : 'experts'
-    const answer = this.verifier.verify(intent, findings, retrieval, { source, reasoningTrace: trace })
+    const answer = await this.verifier.verify(intent, findings, retrieval, { source, reasoningTrace: trace })
 
     // Answer ledger (spec 12.10): question, evidence, classification,
     // confidence, model purposes — append-only, for reproducibility.
     try {
-      this.deps.repos.answerAudits.add({
+      await this.deps.repos.answerAudits.add({
         question: q, intentKind: intent.kind, classification: answer.classification ?? null,
         answerBody: answer.body, citations: answer.citations, contradictions: answer.contradictions.length,
         gaps: answer.gaps, confidence: answer.confidence, source: answer.source,
@@ -135,9 +135,9 @@ export class MasterBrain {
 
     // Persist the turn.
     try {
-      const convo = this.deps.repos.conversations.create(q.slice(0, 60))
-      this.deps.repos.conversations.addTurn(convo, 0, 'user', q)
-      this.deps.repos.conversations.addTurn(convo, 1, 'assistant', answer.body)
+      const convo = await this.deps.repos.conversations.create(q.slice(0, 60))
+      await this.deps.repos.conversations.addTurn(convo, 0, 'user', q)
+      await this.deps.repos.conversations.addTurn(convo, 1, 'assistant', answer.body)
     } catch (err) {
       log.brain.warn(`persist turn failed: ${String(err)}`)
     }
@@ -147,13 +147,13 @@ export class MasterBrain {
   }
 
   /** Instant cached read from the Memory layer if a hinted subject matches. */
-  private phase1Instant(intent: { entityHints: string[] }): string | null {
+  private async phase1Instant(intent: { entityHints: string[] }): Promise<string | null> {
     for (const hint of intent.entityHints) {
-      const ent = this.deps.repos.entities.search(hint, 1)[0]
+      const ent = (await this.deps.repos.entities.search(hint, 1))[0]
       if (!ent) continue
       const kinds = ['organization', 'person', 'project', 'deliverable', 'topic'] as const
       for (const k of kinds) {
-        const mem = this.deps.repos.memory.bySubject(k, ent.normalizedValue ?? ent.value.toLowerCase())
+        const mem = await this.deps.repos.memory.bySubject(k, ent.normalizedValue ?? ent.value.toLowerCase())
         if (mem && mem.narrative.trim()) return mem.narrative
       }
     }
@@ -162,13 +162,13 @@ export class MasterBrain {
 
   /** Plan-and-Solve investigation: decompose → answer each → synthesize. */
   async investigate(question: string): Promise<{ investigationID: string }> {
-    const invID = this.deps.repos.investigations.create(question)
+    const invID = await this.deps.repos.investigations.create(question)
     const subQs = this.decompose(question)
     const answers: string[] = []
     let ordinal = 0
     for (const sub of subQs) {
       const a = await this.ask(sub)
-      this.deps.repos.investigations.addStep(invID, ordinal++, sub, a.body, a.confidence, a.citations.map((c) => c.objectID))
+      await this.deps.repos.investigations.addStep(invID, ordinal++, sub, a.body, a.confidence, a.citations.map((c) => c.objectID))
       answers.push(`Q: ${sub}\nA: ${a.answerText ?? a.body}`)
     }
     const synthPrompt = `Synthesize a coherent answer to "${question}" from these sub-answers:\n\n${answers.join('\n\n')}`
@@ -176,7 +176,7 @@ export class MasterBrain {
       { requires: ['textGeneration', 'reasoning'], prefers: ['longContext'], maxLatency: 'background', privacy: 'localNetwork', estimatedContextTokens: 6000, purpose: 'investigate.synth' },
       synthPrompt, { maxTokens: 600, temperature: 0.3 }
     )
-    this.deps.repos.investigations.finish(invID, synth?.trim() || answers.join('\n\n'))
+    await this.deps.repos.investigations.finish(invID, synth?.trim() || answers.join('\n\n'))
     return { investigationID: invID }
   }
 

@@ -12,19 +12,32 @@ const IDLE_MS = 30 * 60 * 1000
 
 class UserManager {
   private apps = new Map<string, UserApp>()
+  // Concurrent requests for the same (not-yet-open) user share one creation.
+  private pending = new Map<string, Promise<UserApp>>()
 
   constructor() {
     // Periodic sweep of idle users (skipped in one-shot smoke runs).
     setInterval(() => this.sweep(), 5 * 60 * 1000).unref?.()
   }
 
-  get(userId: string): UserApp {
-    let app = this.apps.get(userId)
-    if (!app) {
-      app = new UserApp(userId)
-      this.apps.set(userId, app)
-      if (this.apps.size > MAX_ACTIVE) this.evictOldest()
+  async getOrCreate(userId: string): Promise<UserApp> {
+    const existing = this.apps.get(userId)
+    if (existing) {
+      existing.touch()
+      return existing
     }
+    let inflight = this.pending.get(userId)
+    if (!inflight) {
+      inflight = UserApp.create(userId)
+        .then((app) => {
+          this.apps.set(userId, app)
+          if (this.apps.size > MAX_ACTIVE) this.evictOldest()
+          return app
+        })
+        .finally(() => { this.pending.delete(userId) })
+      this.pending.set(userId, inflight)
+    }
+    const app = await inflight
     app.touch()
     return app
   }

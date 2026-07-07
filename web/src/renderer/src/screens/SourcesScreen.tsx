@@ -10,6 +10,7 @@ import { km, useAsync, uploadAndIngest } from '../lib/km'
 import { PageHeader, Button, Card, EmptyState, Badge, Spinner, Scroll } from '../components/ui'
 import { fmtBytes, fmtRelative } from '../lib/format'
 import { sourceCategory } from '../../../shared/models'
+import { GuideBox } from '../components/guidance'
 
 export default function SourcesScreen(): JSX.Element {
   const files = useAsync(() => km.ingest.listFiles(500), [])
@@ -38,6 +39,7 @@ export default function SourcesScreen(): JSX.Element {
         }
       />
       <Scroll>
+        <GuideBox screen="sources" />
         <Card title={`Files (${files.data?.length ?? 0})`} right={<Button onClick={files.reload}><RefreshCw className="h-3.5 w-3.5" /></Button>}>
           {files.loading ? <Spinner /> : !files.data?.length ? (
             <EmptyState

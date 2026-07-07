@@ -39,24 +39,25 @@ function cosine(a: Float64Array | number[], b: Float64Array | number[]): number 
 export class VectorStore {
   constructor(private L: Ledger) {}
 
-  put(chunkID: UUID, vec: number[]): void {
+  async put(chunkID: UUID, vec: number[]): Promise<void> {
     const { q, scale, dim } = quantize(vec)
-    this.L.db.prepare(
+    await this.L.run(
       `INSERT INTO vectors (chunk_id,dim,q,scale) VALUES (?,?,?,?)
-       ON CONFLICT(chunk_id) DO UPDATE SET dim=excluded.dim, q=excluded.q, scale=excluded.scale`
-    ).run(chunkID, dim, q, scale)
+       ON CONFLICT(chunk_id) DO UPDATE SET dim=excluded.dim, q=excluded.q, scale=excluded.scale`,
+      [chunkID, dim, q, scale]
+    )
   }
 
-  count(): number {
-    return Number((this.L.db.prepare(`SELECT COUNT(*) c FROM vectors`).get() as any).c)
+  async count(): Promise<number> {
+    return Number(((await this.L.first(`SELECT COUNT(*) c FROM vectors`)) as any)?.c ?? 0)
   }
 
   /** Brute-force cosine nearest-neighbour. Returns chunkIDs + similarity. */
-  nearest(query: number[], k = 20): { chunkID: UUID; score: number }[] {
-    const rows = this.L.db.prepare(`SELECT chunk_id, q, scale FROM vectors`).all() as any[]
+  async nearest(query: number[], k = 20): Promise<{ chunkID: UUID; score: number }[]> {
+    const rows = await this.L.all(`SELECT chunk_id, q, scale FROM vectors`) as any[]
     const scored: { chunkID: UUID; score: number }[] = []
     for (const r of rows) {
-      const vec = dequantize(r.q as Buffer, Number(r.scale))
+      const vec = dequantize(Buffer.from(r.q as ArrayBuffer), Number(r.scale))
       scored.push({ chunkID: r.chunk_id, score: cosine(query, vec) })
     }
     scored.sort((a, b) => b.score - a.score)

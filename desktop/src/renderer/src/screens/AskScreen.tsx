@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { MessagesSquare, Send, Bookmark, Compass, FileText } from 'lucide-react'
 import { km } from '../lib/km'
+import { GuideBox } from '../components/guidance'
 import { PageHeader, Button, Textarea, Card, Spinner, EmptyState, Badge } from '../components/ui'
 import { QualityStrip } from '../components/QualityStrip'
 import type { VerifiedAnswer } from '../../../shared/ai'
@@ -20,6 +21,12 @@ export default function AskScreen(): JSX.Element {
   const [answer, setAnswer] = useState<VerifiedAnswer | null>(null)
   const [asked, setAsked] = useState<string>('')
   const activeID = useRef<string | null>(null)
+
+  // Persona workspaces prefill a question via localStorage.
+  useEffect(() => {
+    const pre = localStorage.getItem('rch.ask.prefill')
+    if (pre) { setQuestion(pre); localStorage.removeItem('rch.ask.prefill') }
+  }, [])
 
   useEffect(() => {
     const off = km.ask.onUpdate((u: AskUpdate) => {
@@ -54,6 +61,7 @@ export default function AskScreen(): JSX.Element {
         actions={answer && !answer.refused ? <Button onClick={save}><Bookmark className="h-4 w-4" /> Save</Button> : undefined}
       />
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5">
+        <GuideBox screen="ask" />
         <Card className="p-3">
           <Textarea
             rows={3}

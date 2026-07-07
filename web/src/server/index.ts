@@ -53,9 +53,9 @@ const verificationRequired = (): boolean => emailEnabled() && config.email.requi
 app.post('/api/auth/signup', limitByIp('signup', 10, 15 * 60_000), async (req, res) => {
   try {
     const { email, password, displayName } = req.body ?? {}
-    const user = users.create(String(email ?? ''), String(password ?? ''), displayName)
+    const user = await users.create(String(email ?? ''), String(password ?? ''), displayName)
     if (verificationRequired()) {
-      const token = users.issueVerifyToken(user.id)
+      const token = await users.issueVerifyToken(user.id)
       const link = `${config.appUrl}/#/verify?token=${token}`
       const mail = verificationEmail(link)
       await sendEmail(user.email, mail.subject, mail.html)
@@ -69,9 +69,9 @@ app.post('/api/auth/signup', limitByIp('signup', 10, 15 * 60_000), async (req, r
   }
 })
 
-app.post('/api/auth/login', limitByIp('login', 15, 15 * 60_000), (req, res) => {
+app.post('/api/auth/login', limitByIp('login', 15, 15 * 60_000), async (req, res) => {
   const { email, password } = req.body ?? {}
-  const user = users.verify(String(email ?? ''), String(password ?? ''))
+  const user = await users.verify(String(email ?? ''), String(password ?? ''))
   if (!user) { res.status(401).json({ error: 'Invalid email or password.' }); return }
   if (verificationRequired() && !user.emailVerified) {
     res.status(403).json({ error: 'Please verify your email first — check your inbox.' })
@@ -81,8 +81,8 @@ app.post('/api/auth/login', limitByIp('login', 15, 15 * 60_000), (req, res) => {
   res.json({ user })
 })
 
-app.post('/api/auth/verify-email', limitByIp('verify', 30, 15 * 60_000), (req, res) => {
-  const ok = users.verifyEmailByToken(String(req.body?.token ?? ''))
+app.post('/api/auth/verify-email', limitByIp('verify', 30, 15 * 60_000), async (req, res) => {
+  const ok = await users.verifyEmailByToken(String(req.body?.token ?? ''))
   if (!ok) { res.status(400).json({ error: 'Invalid or already-used verification link.' }); return }
   res.json({ ok: true })
 })
@@ -91,7 +91,7 @@ app.post('/api/auth/request-reset', limitByIp('reset-req', 5, 15 * 60_000), asyn
   // Always 200 — never leak whether the account exists.
   const email = String(req.body?.email ?? '')
   if (emailEnabled()) {
-    const token = users.issueResetToken(email)
+    const token = await users.issueResetToken(email)
     if (token) {
       const mail = resetEmail(`${config.appUrl}/#/reset?token=${token}`)
       await sendEmail(email.trim().toLowerCase(), mail.subject, mail.html)
@@ -102,9 +102,9 @@ app.post('/api/auth/request-reset', limitByIp('reset-req', 5, 15 * 60_000), asyn
   res.status(501).json({ error: 'Password reset is not available on this deployment (no email provider configured). Contact the operator.' })
 })
 
-app.post('/api/auth/reset', limitByIp('reset', 10, 15 * 60_000), (req, res) => {
+app.post('/api/auth/reset', limitByIp('reset', 10, 15 * 60_000), async (req, res) => {
   try {
-    const ok = users.resetPassword(String(req.body?.token ?? ''), String(req.body?.password ?? ''))
+    const ok = await users.resetPassword(String(req.body?.token ?? ''), String(req.body?.password ?? ''))
     if (!ok) { res.status(400).json({ error: 'Invalid or expired reset link. Request a new one.' }); return }
     res.json({ ok: true })
   } catch (err) {
@@ -114,9 +114,9 @@ app.post('/api/auth/reset', limitByIp('reset', 10, 15 * 60_000), (req, res) => {
 
 app.post('/api/auth/logout', (_req, res) => { clearSessionCookie(res); res.json({ ok: true }) })
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   const uid = userIdFromRequest(req)
-  const user = uid ? users.getById(uid) : null
+  const user = uid ? await users.getById(uid) : null
   if (!user) { res.status(401).json({ error: 'unauthenticated' }); return }
   res.json({ user })
 })
@@ -142,13 +142,13 @@ app.post('/api/invoke', requireAuth, limitByUser('invoke', 240, 60_000), async (
   if (typeof path !== 'string') { res.status(400).json({ error: 'bad request' }); return }
   // Daily LLM-answer cap — protects the operator's compute/API credits.
   if (ASK_PATHS.has(path)) {
-    const q = quotas.tryConsumeAsk(req.userId!)
+    const q = await quotas.tryConsumeAsk(req.userId!)
     if (!q.ok) {
       res.status(429).json({ error: `Daily question limit reached (${q.limit}/day). Resets at midnight UTC.` })
       return
     }
   }
-  const userApp = userManager.get(req.userId!)
+  const userApp = await userManager.getOrCreate(req.userId!)
   const handlers = handlersFor(userApp)
   const fn = handlers[path]
   if (!fn) { res.status(404).json({ error: `Unknown method: ${path}` }); return }
@@ -169,24 +169,34 @@ const upload = multer({
   }),
   limits: { fileSize: config.maxUploadBytes }
 })
-app.post('/api/upload', requireAuth, limitByUser('upload', 60, 60 * 60_000), (req: AuthedRequest, res, next) => {
+app.post('/api/upload', requireAuth, limitByUser('upload', 60, 60 * 60_000), async (req: AuthedRequest, res, next) => {
   // Reject before accepting bytes when the user is already at quota.
-  const pre = quotas.storageAllows(req.userId!, 0)
+  const pre = await quotas.storageAllows(req.userId!, 0)
   if (!pre.ok) {
     res.status(413).json({ error: `Storage quota reached (${Math.round(pre.limitBytes / 1048576)} MB). Delete files to free space.` })
     return
   }
   next()
-}, upload.array('files', 200), (req: AuthedRequest, res) => {
+}, upload.array('files', 200), async (req: AuthedRequest, res) => {
   const files = (req.files as Express.Multer.File[]) ?? []
   const total = files.reduce((a, f) => a + f.size, 0)
-  const check = quotas.storageAllows(req.userId!, total)
+  const check = await quotas.storageAllows(req.userId!, total)
   if (!check.ok) {
     for (const f of files) { try { unlinkSync(f.path) } catch { /* best effort */ } }
     res.status(413).json({ error: `Upload exceeds your storage quota (${Math.round(check.limitBytes / 1048576)} MB).` })
     return
   }
-  quotas.recordStorage(req.userId!, total)
+  await quotas.recordStorage(req.userId!, total)
+  // On Vercel, /tmp is per-invocation: ingest NOW, in this request, so the
+  // bytes reach the user's Turso ledger before the sandbox evaporates.
+  if (process.env.VERCEL) {
+    const userApp = await userManager.getOrCreate(req.userId!)
+    const paths = files.map((f) => f.path)
+    const resIngest = await userApp.coordinator.ingestPaths(paths)
+    await userApp.postIngest()
+    res.json({ paths, names: files.map((f) => f.originalname), ingested: true, result: resIngest })
+    return
+  }
   res.json({ paths: files.map((f) => f.path), names: files.map((f) => f.originalname) })
 })
 
@@ -203,11 +213,14 @@ if (existsSync(publicDir)) {
   app.get('/', (_req, res) => res.type('text').send('ReCreateHistory API running. In dev, open the Vite server at http://localhost:5173'))
 }
 
-const server = app.listen(config.port, () => {
+// Vercel imports the app (api/index.ts); only self-host runs a listener.
+export default app
+
+const server = process.env.VERCEL ? null : app.listen(config.port, () => {
   log.app(`ReCreateHistory web on http://localhost:${config.port} (${config.isProd ? 'prod' : 'dev'})`)
   log.app(`AI: ollama=${config.ollama.baseURL} (${config.ollama.model}) cloud=${config.cloud.provider}`)
-  if (users.count() === 0) log.app('No users yet — sign up on the site to create the first account.')
+  users.count().then((n) => { if (n === 0) log.app('No users yet — sign up on the site to create the first account.') }).catch(() => {})
 })
 
-process.on('SIGTERM', () => { userManager.closeAll(); server.close(() => process.exit(0)) })
-process.on('SIGINT', () => { userManager.closeAll(); server.close(() => process.exit(0)) })
+process.on('SIGTERM', () => { userManager.closeAll(); server?.close(() => process.exit(0)) })
+process.on('SIGINT', () => { userManager.closeAll(); server?.close(() => process.exit(0)) })

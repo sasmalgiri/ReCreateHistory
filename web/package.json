@@ -15,6 +15,7 @@
     "smoke": "tsx src/server/smoke.ts"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.4",
     "@types/adm-zip": "^0.5.8",
     "adm-zip": "^0.5.18",
     "bcryptjs": "^2.4.3",

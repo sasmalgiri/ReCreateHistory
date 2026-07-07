@@ -15,10 +15,10 @@ export interface TimelinePeriod {
 export class TimelineEngine {
   constructor(private repos: Repos) {}
 
-  events(query: { start?: number | null; end?: number | null; entityID?: UUID | null; limit?: number }): KEvent[] {
+  async events(query: { start?: number | null; end?: number | null; entityID?: UUID | null; limit?: number }): Promise<KEvent[]> {
     let events = query.entityID
-      ? this.repos.events.forEntity(query.entityID, query.limit ?? 400)
-      : this.repos.events.inRange(query.start, query.end, query.limit ?? 400)
+      ? await this.repos.events.forEntity(query.entityID, query.limit ?? 400)
+      : await this.repos.events.inRange(query.start, query.end, query.limit ?? 400)
     if (query.entityID && (query.start || query.end)) {
       const s = query.start ?? -8.64e15, e = query.end ?? 8.64e15
       events = events.filter((ev) => ev.date >= s && ev.date <= e)
