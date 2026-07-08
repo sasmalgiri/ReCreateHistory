@@ -164,7 +164,7 @@ export const SCREEN_GUIDES: Record<string, { title: string; body: string }> = {
   },
   sources: {
     title: 'Sources — what the ledger knows',
-    body: 'Upload files here. Supported: PDF, Word, Excel/CSV, emails (EML/MBOX), HTML, Markdown, text, and ZIP archives. Every file is hashed, parsed into evidence blocks, and indexed; exact duplicates are detected automatically. Unsupported formats are recorded honestly — never faked.'
+    body: 'Upload files here. Supported: PDF, Word, Excel/CSV, PowerPoint (PPTX), EPUB books, emails (EML/MBOX), HTML, Markdown, text, ZIP archives, and audio (MP3/WAV — transcribed by AI). Every file is hashed, parsed into evidence blocks, and indexed; exact duplicates are detected automatically. Unsupported formats are recorded honestly — never faked.'
   },
   timeline: {
     title: 'Timeline — your documents as dated events',

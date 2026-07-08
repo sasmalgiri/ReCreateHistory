@@ -16,6 +16,7 @@ import { basename } from 'node:path'
 import type { SourceType, BlockType, ExtractionMethod } from '../../shared/models'
 import { sourceCategory } from '../../shared/models'
 import { clean } from './cleaner'
+import { tryTranscribe } from './asr'
 import { log } from '../core/logger'
 
 /** Block as emitted by a parser — the coordinator assigns IDs + citations. */
@@ -61,9 +62,16 @@ export async function loadFile(path: string, sourceType: SourceType): Promise<Lo
         return [await loadEml(path)]
       case 'mbox':
         return await loadMbox(path)
+      case 'pptx':
+        return [await loadPptx(path)]
+      case 'epub':
+        return [await loadEpub(path)]
+      case 'mp3': case 'wav':
+        return [await loadAudio(path, sourceType)]
       default:
         if (cat === 'image') return [unsupported('needs_ocr', 'image has no text layer — OCR engine not installed')]
-        if (cat === 'audio' || cat === 'video') return [unsupported('unsupported', 'audio/video transcription (ASR) not installed')]
+        if (cat === 'audio') return [unsupported('unsupported', 'this audio format is not transcribable here — use MP3 or WAV')]
+        if (cat === 'video') return [unsupported('unsupported', 'video transcription is not available — extract the audio as MP3 and upload that')]
         if (cat === 'archive') return [unsupported('unsupported', `${sourceType} archives are not extractable (only ZIP is)`)]
         return [await loadPlainText(path, false)]
     }
@@ -331,4 +339,81 @@ async function loadMbox(path: string): Promise<LoadedDocument[]> {
   if (out.length) return out
   const content = clean(raw)
   return [{ content, metadata: { filename: basename(path) }, blocks: paragraphBlocks(content) }]
+}
+
+// ── PPTX — slides are ZIP'd XML; text lives in <a:t> runs ───────────────
+
+async function loadPptx(path: string): Promise<LoadedDocument> {
+  const AdmZip: any = (await import('adm-zip')).default
+  const zip = new AdmZip(path)
+  const slides: { n: number; text: string }[] = []
+  for (const e of zip.getEntries()) {
+    const m = String(e.entryName).match(/^ppt\/slides\/slide(\d+)\.xml$/)
+    if (!m) continue
+    const xml = e.getData().toString('utf8')
+    const runs = [...xml.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map((r) => r[1])
+    const text = clean(runs.join(' '))
+    if (text) slides.push({ n: Number(m[1]), text })
+  }
+  if (!slides.length) return unsupported('unsupported', 'presentation has no extractable text')
+  slides.sort((a, b) => a.n - b.n)
+  const blocks: RawBlock[] = slides.map((sl) => ({
+    blockType: 'slide', text: sl.text, page: sl.n,
+    sectionPath: [`Slide ${sl.n}`], extractionMethod: 'native', extractionConfidence: 1.0
+  }))
+  return {
+    content: clean(slides.map((sl) => `Slide ${sl.n}: ${sl.text}`).join('\n\n')),
+    metadata: { filename: basename(path), slides: slides.length },
+    blocks
+  }
+}
+
+// ── EPUB — chapters are ZIP'd XHTML ─────────────────────────────────────
+
+async function loadEpub(path: string): Promise<LoadedDocument> {
+  const AdmZip: any = (await import('adm-zip')).default
+  const zip = new AdmZip(path)
+  const chapters: { name: string; text: string }[] = []
+  const entries = zip.getEntries()
+    .filter((e: any) => /\.(xhtml|html|htm)$/i.test(e.entryName) && !/(toc|nav|cover)/i.test(e.entryName))
+    .sort((a: any, b: any) => String(a.entryName).localeCompare(String(b.entryName), undefined, { numeric: true }))
+  for (const e of entries.slice(0, 300)) {
+    const html = e.getData().toString('utf8')
+    const title = html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim()
+    const text = clean(html
+      .replace(/<(script|style)[\s\S]*?<\/\1>/gi, '')
+      .replace(/<(h[1-6]|p|div|li|br)[^>]*>/gi, '\n\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>'))
+    if (text.length > 40) chapters.push({ name: title || basename(String(e.entryName)), text })
+  }
+  if (!chapters.length) return unsupported('unsupported', 'no readable chapters found in this EPUB')
+  const blocks: RawBlock[] = []
+  for (const ch of chapters) {
+    blocks.push({ blockType: 'heading', text: ch.name, sectionPath: [ch.name], extractionMethod: 'native', extractionConfidence: 1.0 })
+    for (const b of paragraphBlocks(ch.text)) blocks.push({ ...b, sectionPath: [ch.name] })
+  }
+  return {
+    content: clean(chapters.map((c) => `${c.name}\n\n${c.text}`).join('\n\n')),
+    metadata: { filename: basename(path), chapters: chapters.length },
+    blocks
+  }
+}
+
+// ── Audio — transcribed by the configured AI (see ./asr); honest when off ──
+
+async function loadAudio(path: string, format: string): Promise<LoadedDocument> {
+  const transcript = await tryTranscribe(path, format)
+  if (!transcript) {
+    return unsupported('unsupported', 'audio transcription needs the AI provider (not configured or file too large)')
+  }
+  const blocks: RawBlock[] = [
+    { blockType: 'audio_transcript', text: `Transcript of ${basename(path)}`, extractionMethod: 'asr', extractionConfidence: 0.85, sectionPath: ['Transcript'] },
+    ...paragraphBlocks(transcript).map((b) => ({ ...b, extractionMethod: 'asr' as const, extractionConfidence: 0.85 }))
+  ]
+  return {
+    content: clean(transcript),
+    metadata: { filename: basename(path), transcribed: true, asr: true },
+    blocks
+  }
 }

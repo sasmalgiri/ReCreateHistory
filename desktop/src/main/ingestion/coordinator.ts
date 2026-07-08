@@ -24,8 +24,8 @@ import { sourceCategory, type EvidenceBlock } from '../../shared/models'
 
 const SUPPORTED_EXT = new Set([
   'pdf', 'docx', 'doc', 'txt', 'log', 'md', 'markdown', 'rtf', 'odt', 'epub',
-  'csv', 'tsv', 'xlsx', 'xls', 'html', 'htm', 'json',
-  'eml', 'emlx', 'mbox', 'msg', 'png', 'jpg', 'jpeg', 'zip'
+  'csv', 'tsv', 'xlsx', 'xls', 'ods', 'html', 'htm', 'json', 'pptx', 'epub',
+  'eml', 'emlx', 'mbox', 'msg', 'png', 'jpg', 'jpeg', 'zip', 'mp3', 'wav', 'm4a', 'mp4'
 ])
 
 export interface IngestActivityState {

@@ -333,7 +333,7 @@ export function sourceCategory(t: SourceType): SourceCategory {
 
 export type BlockType =
   | 'paragraph' | 'heading' | 'table_row' | 'email_message' | 'image'
-  | 'ocr_text' | 'code' | 'log_event'
+  | 'ocr_text' | 'code' | 'log_event' | 'slide' | 'audio_transcript'
 
 export type ExtractionMethod = 'native' | 'ocr' | 'vision' | 'asr' | 'manual'
 

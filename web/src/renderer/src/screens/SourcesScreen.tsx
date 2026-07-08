@@ -45,7 +45,7 @@ export default function SourcesScreen(): JSX.Element {
             <EmptyState
               icon={<Upload className="h-8 w-8" />}
               title="No sources yet"
-              hint="Upload PDFs, Word docs, emails (.eml/.mbox), spreadsheets, HTML, or text to build your knowledge ledger."
+              hint="Upload PDFs, Word docs, PowerPoint, EPUB, emails (.eml/.mbox), spreadsheets, audio (MP3/WAV), HTML, or text to build your knowledge ledger."
               action={<Button variant="primary" onClick={upload}><Upload className="h-4 w-4" /> Upload files</Button>}
             />
           ) : (
