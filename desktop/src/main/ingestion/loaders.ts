@@ -17,6 +17,7 @@ import type { SourceType, BlockType, ExtractionMethod } from '../../shared/model
 import { sourceCategory } from '../../shared/models'
 import { clean } from './cleaner'
 import { tryTranscribe } from './asr'
+import { tryOcr } from './ocr'
 import { log } from '../core/logger'
 
 /** Block as emitted by a parser — the coordinator assigns IDs + citations. */
@@ -66,12 +67,14 @@ export async function loadFile(path: string, sourceType: SourceType): Promise<Lo
         return [await loadPptx(path)]
       case 'epub':
         return [await loadEpub(path)]
-      case 'mp3': case 'wav':
+      case 'mp3': case 'wav': case 'm4a': case 'aac': case 'mp4': case 'mov':
         return [await loadAudio(path, sourceType)]
+      case 'png': case 'jpg': case 'webp': case 'heic': case 'tiff':
+        return [await loadImage(path, sourceType)]
       default:
-        if (cat === 'image') return [unsupported('needs_ocr', 'image has no text layer — OCR engine not installed')]
+        if (cat === 'image') return [unsupported('needs_ocr', 'this image format has no OCR support here — use PNG or JPG')]
         if (cat === 'audio') return [unsupported('unsupported', 'this audio format is not transcribable here — use MP3 or WAV')]
-        if (cat === 'video') return [unsupported('unsupported', 'video transcription is not available — extract the audio as MP3 and upload that')]
+        if (cat === 'video') return [unsupported('unsupported', 'this video format is not transcribable here — use MP4')]
         if (cat === 'archive') return [unsupported('unsupported', `${sourceType} archives are not extractable (only ZIP is)`)]
         return [await loadPlainText(path, false)]
     }
@@ -414,6 +417,25 @@ async function loadAudio(path: string, format: string): Promise<LoadedDocument> 
   return {
     content: clean(transcript),
     metadata: { filename: basename(path), transcribed: true, asr: true },
+    blocks
+  }
+}
+
+// ── Images — OCR via the per-app engine (desktop: local Tesseract; web:
+// Gemini vision). Honest needs_ocr when no engine can read it. ─────────────
+
+async function loadImage(path: string, ext: string): Promise<LoadedDocument> {
+  const text = await tryOcr(path, ext)
+  if (!text) {
+    return unsupported('needs_ocr', 'no readable text extracted (blank image, unsupported format, engine unavailable, or file too large)')
+  }
+  const blocks: RawBlock[] = paragraphBlocks(clean(text)).map((b) => ({
+    ...b, blockType: b.blockType === 'heading' ? 'heading' : 'ocr_text',
+    extractionMethod: 'ocr' as const, extractionConfidence: 0.8
+  }))
+  return {
+    content: clean(text),
+    metadata: { filename: basename(path), ocr: true },
     blocks
   }
 }
