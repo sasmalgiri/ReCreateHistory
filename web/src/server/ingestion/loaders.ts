@@ -425,17 +425,40 @@ async function loadAudio(path: string, format: string): Promise<LoadedDocument> 
 // Gemini vision). Honest needs_ocr when no engine can read it. ─────────────
 
 async function loadImage(path: string, ext: string): Promise<LoadedDocument> {
-  const text = await tryOcr(path, ext)
-  if (!text) {
+  const raw = await tryOcr(path, ext)
+  if (!raw) {
     return unsupported('needs_ocr', 'no readable text extracted (blank image, unsupported format, engine unavailable, or file too large)')
   }
-  const blocks: RawBlock[] = paragraphBlocks(clean(text)).map((b) => ({
+  // Tables in scans arrive as ===TABLE=== TSV sections (web/Gemini path; plain
+  // Tesseract text simply has no markers). Rows become STRUCTURED evidence —
+  // same table_rows store the CSV/XLSX parsers feed.
+  const [prose, ...tableSections] = raw.split(/^\s*===TABLE===\s*$/m)
+  const blocks: RawBlock[] = paragraphBlocks(clean(prose)).map((b) => ({
     ...b, blockType: b.blockType === 'heading' ? 'heading' : 'ocr_text',
     extractionMethod: 'ocr' as const, extractionConfidence: 0.8
   }))
+  const textLines: string[] = prose.trim() ? [clean(prose)] : []
+  let rowNum = 0
+  for (const section of tableSections) {
+    const lines = section.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.includes('\t'))
+    if (lines.length < 2) continue
+    const headers = lines[0].split('\t').map((h, i) => h.trim() || `col${i + 1}`)
+    for (let r = 1; r < lines.length; r++) {
+      const cells = lines[r].split('\t')
+      const columns: Record<string, unknown> = {}
+      headers.forEach((h, k) => { columns[h] = (cells[k] ?? '').trim() })
+      const rowText = headers.map((h, k) => `${h}=${(cells[k] ?? '').trim()}`).join('; ')
+      blocks.push({
+        blockType: 'table_row', text: rowText, structuredData: columns,
+        rowNum: ++rowNum, sheet: basename(path),
+        extractionMethod: 'ocr', extractionConfidence: 0.75
+      })
+      textLines.push(rowText)
+    }
+  }
   return {
-    content: clean(text),
-    metadata: { filename: basename(path), ocr: true },
+    content: clean(textLines.join('\n')),
+    metadata: { filename: basename(path), ocr: true, tables: tableSections.length },
     blocks
   }
 }

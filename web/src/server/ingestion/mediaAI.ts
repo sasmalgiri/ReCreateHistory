@@ -79,7 +79,9 @@ export async function tryOcr(path: string, ext: string): Promise<string | null> 
   try {
     const buf = await readFile(path)
     if (buf.length > MAX_BYTES) return null
-    const prompt = 'Extract ALL text from this image verbatim (OCR). Preserve reading order and line breaks. Output ONLY the extracted text. If the image contains no readable text, output exactly: NO_TEXT'
+    const prompt = 'Extract ALL text from this image verbatim (OCR). Preserve reading order and line breaks. ' +
+      'If the image contains one or more TABLES, output the non-table text first, then for EACH table output a line containing exactly ===TABLE=== followed by the table as tab-separated rows (first row = column headers, one row per line). ' +
+      'Output ONLY the extracted content. If the image contains no readable text, output exactly: NO_TEXT'
     const text = isGemini() ? await geminiInline(mime, buf, prompt) : await compatImage(mime, buf, prompt)
     if (!text || /^NO_TEXT\b/.test(text)) return null
     return text.length > 3 ? text : null
