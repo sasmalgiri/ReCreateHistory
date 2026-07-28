@@ -23,7 +23,7 @@
       "destination": "/api/index"
     },
     {
-      "source": "/:path((?!assets/|icon\\.png|google7ca3211ae0d900cc\\.html).*)",
+      "source": "/:path((?!assets/|icon\\.png|google7ca3211ae0d900cc\\.html|sitemap\\.xml|robots\\.txt).*)",
       "destination": "/index.html"
     }
   ]
